@@ -1,0 +1,13 @@
+{
+  "name": "Banc de traction TVM — Antonin Artaud",
+  "short_name": "TVM Traction",
+  "description": "Mesure de force CZL301 / HX711 pour le banc SAUTER TVM 5000N230N",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#12151c",
+  "theme_color": "#ffb020",
+  "lang": "fr",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

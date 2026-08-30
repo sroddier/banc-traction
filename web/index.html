@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#ffb020">
+  <title>Banc de traction TVM — Antonin Artaud</title>
+  <link rel="stylesheet" href="css/app.css">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+</head>
+<body>
+  <div class="hazard" aria-hidden="true"></div>
+  <div class="wrap">
+    <header class="head">
+      <div class="brand">
+        <h1>Banc de traction</h1>
+        <p>SAUTER TVM 5000N230N · CZL301 500&nbsp;kg · Lycée Antonin Artaud · BTS MS / FabLab</p>
+      </div>
+      <div class="pills">
+        <span class="pill sim" id="pill-link">Simulation</span>
+        <span class="pill" id="pill-sps">SPS —</span>
+        <span class="pill" id="pill-lim">Limite 4000 N</span>
+      </div>
+    </header>
+
+    <nav class="tabs" role="tablist">
+      <button type="button" role="tab" id="tab-traction" aria-selected="true" data-mode="traction">Traction</button>
+      <button type="button" role="tab" id="tab-fatigue" aria-selected="false" data-mode="fatigue">Fatigue</button>
+      <button type="button" role="tab" id="tab-calib" aria-selected="false" data-mode="calib">Calib / Limites</button>
+    </nav>
+
+    <div class="grid">
+      <aside class="panel">
+        <div class="readout">
+          <div class="n" id="force-n">0,0</div>
+          <div class="unit" id="force-unit">N</div>
+        </div>
+        <div class="meta">
+          <div><span>Fmax</span><b id="fmax">0,0 N</b></div>
+          <div><span>kg</span><b id="fkg">0,000 kg</b></div>
+          <div id="box-cyc"><span>Cycles N</span><b id="fcyc">0</b></div>
+          <div id="box-fmin"><span>Fmin cycle</span><b id="fmin">—</b></div>
+        </div>
+        <p class="note" id="status-msg">Mode simulation — pas d’ESP32. Le TVM n’est pas commandé par cette page.</p>
+        <div class="row">
+          <button class="act" type="button" id="btn-reconnect">Reconnecter ESP32</button>
+          <button class="act" type="button" id="btn-sim">Forcer simulation</button>
+        </div>
+      </aside>
+
+      <section class="panel">
+        <div class="chart-box"><canvas id="chart"></canvas></div>
+
+        <div class="view on" id="view-traction">
+          <div class="row">
+            <label class="field">Éprouvette
+              <input id="name-epro" type="text" maxlength="80" placeholder="ex. PLA-eprou-01" autocomplete="off">
+            </label>
+          </div>
+          <div class="row">
+            <button class="act ok" type="button" id="btn-tare">Tare</button>
+            <button class="act primary" type="button" id="btn-start">Démarrer</button>
+            <button class="act" type="button" id="btn-rupture">Rupture manuelle</button>
+            <button class="act danger" type="button" id="btn-stop">Stop relais</button>
+            <button class="act" type="button" id="btn-csv">CSV</button>
+            <button class="act" type="button" id="btn-reset">RAZ</button>
+          </div>
+          <p class="note">Enregistrement : <span id="rec-info">arrêté</span>. Colonnes CSV : <kbd>time_ms,force_N,force_kg,event</kbd>. Pas d’extensomètre sur l’ESP32.</p>
+        </div>
+
+        <div class="view" id="view-fatigue">
+          <p class="note"><strong>Le mouvement est assuré par le mode Repeat du TVM.</strong> L’ESP32 ne commande pas le vérin : il mesure la force et compte les cycles à partir des pics. Pas de capteur de déplacement.</p>
+          <div class="row">
+            <button class="act ok" type="button" id="btn-tare2">Tare</button>
+            <button class="act primary" type="button" id="btn-start2">Démarrer comptage</button>
+            <button class="act danger" type="button" id="btn-stop2">Stop relais</button>
+            <button class="act" type="button" id="btn-csv2">CSV cycles</button>
+            <button class="act" type="button" id="btn-reset2">RAZ cycles</button>
+          </div>
+          <p class="note">Dernier cycle : Fmin <b id="last-fmin">—</b> · Fmax <b id="last-fmax">—</b>. CSV : <kbd>cycle,t_ms,Fmin_N,Fmax_N</kbd>.</p>
+        </div>
+
+        <div class="view" id="view-calib">
+          <p class="note">Cellule CZL301 500&nbsp;kg, 2,0030&nbsp;mV/V, 350&nbsp;Ω, 0,02&nbsp;% FS. Excitation HX711 à <strong>3,3&nbsp;V</strong> (GPIO ESP32 non 5&nbsp;V tolerant). Surcharge constructeur 120&nbsp;% FS. Limite logicielle par défaut <strong>4000&nbsp;N</strong>, plafond dur &lt;&nbsp;4900&nbsp;N.</p>
+          <div class="row">
+            <button class="act ok" type="button" id="btn-tare3">Tare à vide</button>
+            <label class="field">Masse connue (kg)
+              <input id="ref-kg" type="number" step="0.001" min="0.05" value="5">
+            </label>
+            <button class="act primary" type="button" id="btn-cal">Étalonner</button>
+          </div>
+          <div class="row">
+            <label class="field">Échelle (counts / N)
+              <input id="scale" type="number" step="0.01" min="1" value="877">
+            </label>
+            <button class="act" type="button" id="btn-scale">Appliquer échelle</button>
+            <label class="field">Limite logicielle (N)
+              <input id="limit" type="number" step="10" min="50" max="4899" value="4000">
+            </label>
+            <button class="act" type="button" id="btn-limit">Appliquer limite</button>
+          </div>
+          <div class="row">
+            <label class="field">Unité
+              <select id="unit"><option value="N">Newton (N)</option><option value="kg">kgf</option></select>
+            </label>
+            <label class="field">Cadence
+              <select id="sps"><option value="auto">Auto 80 puis 10 si instable</option><option value="80">80 SPS</option><option value="10">10 SPS</option></select>
+            </label>
+            <button class="act" type="button" id="btn-sps">Appliquer cadence</button>
+          </div>
+          <p class="note">Relais STOP : GPIO 26, <strong>actif haut</strong> (HIGH = relais collé = coupure moteur). Pilotage via transistor, jamais la bobine en direct. Inverser <kbd>STOP_ACTIVE_HIGH</kbd> dans <kbd>config.h</kbd> si le câblage est actif bas.</p>
+        </div>
+      </section>
+    </div>
+    <p class="foot">Wi-Fi AP <kbd>TVM-TRACTION</kbd> / mot de passe <kbd>traction1</kbd> · http://192.168.4.1 · WebSocket port 81 · v1 atelier</p>
+  </div>
+  <script src="js/protocol.js"></script>
+  <script src="js/chart.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
