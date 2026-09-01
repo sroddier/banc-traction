@@ -40,47 +40,58 @@
     if (!w || !h) return;
     var p = this.pad;
     ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = "#0c0e13";
+    ctx.fillStyle = "#f3e8e0";
     ctx.fillRect(0, 0, w, h);
 
     var pts = this.pts;
     var tMin = pts.length ? pts[0].t : 0;
     var tMax = pts.length ? pts[pts.length - 1].t : 1000;
     if (tMax <= tMin) tMax = tMin + 1000;
-    var nMin = 0, nMax = 100;
-    var i;
+    var dataMin = 0, dataMax = 0, i;
     for (i = 0; i < pts.length; i++) {
-      if (pts[i].N > nMax) nMax = pts[i].N;
-      if (pts[i].N < nMin) nMin = pts[i].N;
+      if (pts[i].N > dataMax) dataMax = pts[i].N;
+      if (pts[i].N < dataMin) dataMin = pts[i].N;
     }
-    if (this.limitN && this.limitN > nMax) nMax = this.limitN;
-    nMax = nMax * 1.12 + 10;
-    if (nMin > 0) nMin = 0;
-    if (nMin < 0) nMin *= 1.12;
+    function niceCeil(v) {
+      var a = Math.abs(v);
+      if (a < 10) return (v < 0 ? -1 : 1) * Math.max(10, Math.ceil(a / 2) * 2);
+      var step = a <= 25 ? 5 : a <= 50 ? 10 : a <= 100 ? 10 : a <= 250 ? 25
+               : a <= 500 ? 50 : a <= 1000 ? 100 : a <= 2500 ? 250 : 500;
+      var n = Math.ceil(a / step) * step;
+      return v < 0 ? -n : n;
+    }
+    var nMax = niceCeil(Math.max(dataMax * 1.18, 20));
+    var nMin = dataMin >= -2 ? 0 : niceCeil(dataMin * 1.18);
+    if (nMax <= nMin) nMax = nMin + 20;
+    if (this.limitN && dataMax >= this.limitN * 0.55 && this.limitN > nMax) {
+      nMax = niceCeil(this.limitN);
+    }
 
     function x(t) { return p.l + (t - tMin) / (tMax - tMin) * (w - p.l - p.r); }
     function y(n) { return p.t + (1 - (n - nMin) / (nMax - nMin)) * (h - p.t - p.b); }
 
-    ctx.strokeStyle = "#2a3140";
+    ctx.strokeStyle = "#e0d0c4";
     ctx.lineWidth = 1;
-    ctx.fillStyle = "#8b9bb4";
+    ctx.fillStyle = "#7a655c";
     ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
     ctx.textAlign = "right";
     ctx.textBaseline = "middle";
-    var steps = 4;
-    for (var gi = 0; gi <= steps; gi++) {
-      var nv = nMin + (nMax - nMin) * gi / steps;
-      var yy = y(nv);
+    var span = nMax - nMin;
+    var gstep = span <= 40 ? 5 : span <= 100 ? 10 : span <= 250 ? 25
+              : span <= 500 ? 50 : span <= 1000 ? 100 : span <= 2500 ? 250 : 500;
+    var g0 = Math.ceil(nMin / gstep) * gstep;
+    for (var gv = g0; gv <= nMax + 0.01; gv += gstep) {
+      var yy = y(gv);
       ctx.beginPath();
       ctx.moveTo(p.l, yy);
       ctx.lineTo(w - p.r, yy);
       ctx.stroke();
-      ctx.fillText(nv.toFixed(0) + " N", p.l - 6, yy);
+      ctx.fillText(gv.toFixed(0) + " N", p.l - 6, yy);
     }
 
-    if (this.limitN && this.limitN > nMin && this.limitN < nMax) {
+    if (this.limitN && this.limitN > nMin && this.limitN <= nMax) {
       var yl = y(this.limitN);
-      ctx.strokeStyle = "#ff4d4d";
+      ctx.strokeStyle = "#c41616";
       ctx.lineWidth = 1.5;
       ctx.setLineDash([6, 5]);
       ctx.beginPath();
@@ -88,14 +99,19 @@
       ctx.lineTo(w - p.r, yl);
       ctx.stroke();
       ctx.setLineDash([]);
-      ctx.fillStyle = "#ff4d4d";
+      ctx.fillStyle = "#c41616";
       ctx.textAlign = "left";
       ctx.fillText("limite " + Math.round(this.limitN) + " N", p.l + 6, yl - 8);
+    } else if (this.limitN) {
+      ctx.fillStyle = "#c45a4a";
+      ctx.textAlign = "right";
+      ctx.font = "10px ui-sans-serif, system-ui, sans-serif";
+      ctx.fillText("limite " + Math.round(this.limitN) + " N hors échelle", w - p.r, p.t + 4);
     }
 
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
-    ctx.fillStyle = "#8b9bb4";
+    ctx.fillStyle = "#7a655c";
     ctx.fillText(((tMax - tMin) / 1000).toFixed(1) + " s", w - p.r - 24, h - p.b + 10);
     ctx.textAlign = "left";
     ctx.fillText("0 s", p.l, h - p.b + 10);
@@ -104,7 +120,7 @@
       ctx.beginPath();
       ctx.moveTo(x(pts[0].t), y(pts[0].N));
       for (i = 1; i < pts.length; i++) ctx.lineTo(x(pts[i].t), y(pts[i].N));
-      ctx.strokeStyle = "#ffb020";
+      ctx.strokeStyle = "#983830";
       ctx.lineWidth = 2;
       ctx.stroke();
       var last = pts[pts.length - 1];
@@ -115,20 +131,20 @@
       ctx.lineTo(x(pts[0].t), y(nMin));
       ctx.closePath();
       var lg = ctx.createLinearGradient(0, y(Math.max(nMax, 1)), 0, y(nMin));
-      lg.addColorStop(0, "rgba(255,176,32,0.20)");
-      lg.addColorStop(1, "rgba(255,176,32,0)");
+      lg.addColorStop(0, "rgba(152,56,48,0.22)");
+      lg.addColorStop(1, "rgba(152,56,48,0)");
       ctx.fillStyle = lg;
       ctx.fill();
     }
 
     for (i = 0; i < pts.length; i++) {
       if (!pts[i].evt) continue;
-      var col = pts[i].evt === "break" ? "#ff4d4d"
-              : pts[i].evt === "limit" ? "#ff7a18"
-              : pts[i].evt === "hxfail" ? "#ff4d4d"
-              : pts[i].evt === "cycle" ? "#3dd68c"
-              : pts[i].evt === "peak" ? "#5b8cff"
-              : "#c9d4e8";
+      var col = pts[i].evt === "break" ? "#c41616"
+              : pts[i].evt === "limit" ? "#c45a12"
+              : pts[i].evt === "hxfail" ? "#c41616"
+              : pts[i].evt === "cycle" ? "#2f6b4f"
+              : pts[i].evt === "peak" ? "#3d5c8a"
+              : "#7a655c";
       ctx.strokeStyle = col;
       ctx.setLineDash([4, 4]);
       ctx.beginPath();

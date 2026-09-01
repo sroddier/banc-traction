@@ -36,6 +36,7 @@
   var statusCal = false;
   var tared = false;
   var scaleVal = 877;
+  var offsetRaw = 0;
   var simBroken = false;
   var overLive = false;
   var overSeen = false;
@@ -130,7 +131,11 @@
     $("last-fmax").textContent = lastFmax ? fmt(lastFmax, 1) + " N" : "—";
     $("pill-lim").textContent = "Limite " + Math.round(limitN) + " N";
     $("pill-sps").textContent = "SPS " + sps;
-    $("raw").textContent = lastRaw ? String(lastRaw) : "—";
+    $("raw").textContent = String(lastRaw);
+    var dlt = lastRaw - offsetRaw;
+    $("delta").textContent = (dlt > 0 ? "+" : "") + String(dlt);
+    var ph = $("polarity-hint");
+    if (ph) ph.classList.toggle("hidden", !(tared && forceN < -1));
     var sd = rollingSd();
     $("sigma").textContent = isNaN(sd) ? "—" : fmt(sd, 2) + " N";
     $("rec-info").textContent = running
@@ -216,9 +221,13 @@
   function onStatus(o) {
     if (o.limit_N != null && o.limit_N !== "") limitN = +o.limit_N;
     if (o.sps) sps = +o.sps;
-    if (o.scale) {
+    if (o.scale != null && o.scale !== "") {
       scaleVal = +o.scale;
-      $("scale").value = String(scaleVal.toFixed(2));
+      $("scale").value = String(scaleVal.toFixed(3));
+    }
+    if (o.offset != null) offsetRaw = +o.offset;
+    if (o.msg && o.msg.indexOf("Étalonnage OK") === 0) {
+      pushCalLog(parseFloat($("ref-kg").value) || 0, scaleVal);
     }
     if (o.unit) unit = o.unit;
     if (o.cal != null) statusCal = !!o.cal;
@@ -566,31 +575,46 @@
 
   $("btn-cal").onclick = function () {
     var kg = parseFloat($("ref-kg").value);
-    if (!(kg > 0)) return;
-    if (kg < 20 && !confirm("Masse < 20 kg (1 % de la cellule 500 kg) : l'échelle sera imprécise. Continuer ?")) return;
+    if (!(kg > 0)) {
+      $("status-msg").textContent = "Indiquer la masse posée, en kg (ex. 1 ou 2).";
+      return;
+    }
     if (sim) {
-      scaleVal = 877;
+      var signed = forceN < 0 ? -Math.abs(scaleVal) : Math.abs(scaleVal) || 877;
+      scaleVal = signed;
       statusCal = true;
-      $("scale").value = "877";
-      pushCalLog(kg, 877);
-      $("status-msg").textContent = "Étalonnage simulé (masse " + kg + " kg). Sur le banc réel, poser la masse puis cliquer.";
+      tared = true;
+      $("scale").value = String(scaleVal.toFixed(3));
+      forceN = TVM.kgToN(kg);
+      dispN = forceN;
+      pushCalLog(kg, scaleVal);
+      $("status-msg").textContent = "Étalonnage simulé (" + kg + " kg, échelle " + scaleVal + "). Sur le banc : tare à vide, poser la masse, puis Étalonner.";
+      showForce();
     } else {
       send(TVM.cmd.calibrate(kg, TVM.kgToN(kg)));
-      pushCalLog(kg, scaleVal);
+      $("status-msg").textContent = "Étalonnage en cours (laisser la masse posée)…";
     }
+  };
+  $("btn-invert").onclick = function () {
+    unlockAudio();
+    if (sim) {
+      scaleVal = -scaleVal;
+      forceN = -forceN;
+      dispN = forceN;
+      $("scale").value = String(scaleVal.toFixed(3));
+      $("status-msg").textContent = "Sens inversé (simulation). Échelle " + scaleVal.toFixed(3) + " counts/N.";
+      showForce();
+    } else send(TVM.cmd.invert());
   };
   $("btn-scale").onclick = function () {
     var sc = parseFloat($("scale").value);
-    if (!(Math.abs(sc) > 1)) return;
-    if (Math.abs(sc) < 50 || Math.abs(sc) > 50000) {
-      $("status-msg").textContent = "Échelle hors plage (50–50000 counts/N).";
+    if (!(Math.abs(sc) >= 0.5) || Math.abs(sc) > 2000000) {
+      $("status-msg").textContent = "Échelle hors plage (0,5 à 2e6 counts/N, signe autorisé).";
       return;
     }
-    if (Math.abs(Math.abs(sc) - 877) > 400 &&
-        !confirm("Échelle " + sc + " loin de 877 counts/N théorique. Enregistrer ?")) return;
     scaleVal = sc;
     if (!sim) send(TVM.cmd.setScale(sc));
-    $("status-msg").textContent = "Échelle " + sc + " counts/N";
+    $("status-msg").textContent = "Échelle " + sc + " counts/N" + (sc < 0 ? " (jauge inverse)" : "");
   };
   $("btn-limit").onclick = function () {
     var n = parseFloat($("limit").value);

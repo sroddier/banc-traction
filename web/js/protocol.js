@@ -4,7 +4,7 @@
 (function (g) {
   "use strict";
   var TVM = g.TVM || {};
-  TVM.VERSION = "1.1.1";
+  TVM.VERSION = "1.2.1";
   TVM.G = 9.80665;
   TVM.WS_PATH = "/ws";
   TVM.LIMIT_DEFAULT = 4000;
@@ -45,6 +45,7 @@
     setUnit:   function (u) { return JSON.stringify({ cmd: "setUnit", unit: u }); },
     setLimit:  function (n) { return JSON.stringify({ cmd: "setLimit", limit_N: n }); },
     setScale:  function (s) { return JSON.stringify({ cmd: "setScale", scale: s }); },
+    invert:    function () { return JSON.stringify({ cmd: "invert" }); },
     calibrate: function (refKg, refN) {
       var o = { cmd: "calibrate" };
       if (refKg != null) o.ref_kg = refKg;

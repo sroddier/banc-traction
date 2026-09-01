@@ -12,14 +12,17 @@ from reportlab.pdfgen import canvas
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, "docs", "fiche-enseignant-etalonnage.pdf")
 
-BG = (0x12 / 255.0, 0x15 / 255.0, 0x1C / 255.0)
-AMBER = (1.0, 0xB0 / 255.0, 0x20 / 255.0)
-RED = (0x9B / 255.0, 0x12 / 255.0, 0x12 / 255.0)
-INK = (0.12, 0.14, 0.18)
-MUTED = (0.35, 0.40, 0.48)
+BRAND = (152 / 255.0, 56 / 255.0, 48 / 255.0)
+BG = (0.12, 0.11, 0.10)
+AMBER = BRAND
+RED = (0xC4 / 255.0, 0x16 / 255.0, 0x16 / 255.0)
+INK = (44 / 255.0, 28 / 255.0, 24 / 255.0)
+MUTED = (0.48, 0.40, 0.36)
 OK = (0.12, 0.42, 0.32)
-CARD = (0.97, 0.97, 0.98)
-LINE = (0.82, 0.84, 0.88)
+CARD = (0.99, 0.97, 0.95)
+LINE = (0.88, 0.82, 0.77)
+CREAM = (0.965, 0.937, 0.910)
+LOGO = os.path.join(ROOT, "docs", "logo-artaud.png")
 G = 9.80665
 
 
@@ -69,7 +72,7 @@ def bullet_num(c, x, y, n, title, body, width, fill_rgb=None):
     fill_rgb = fill_rgb or AMBER
     c.setFillColorRGB(*fill_rgb)
     c.circle(x + 3.2 * mm, y + 1.4 * mm, 3.3 * mm, fill=1, stroke=0)
-    c.setFillColorRGB(*BG)
+    c.setFillColorRGB(1, 1, 1)
     c.setFont("UiB", 8.5)
     c.drawCentredString(x + 3.2 * mm, y, str(n))
     c.setFillColorRGB(*INK)
@@ -92,17 +95,31 @@ def draw():
     c.setTitle("Banc de traction TVM — Étalonnage jauge (enseignant)")
     c.setAuthor("Lycée Antonin Artaud — BTS MS / FabLab")
 
-    c.setFillColorRGB(1, 1, 1)
+    c.setFillColorRGB(*CREAM)
     c.rect(0, 0, W, H, fill=1, stroke=0)
 
-    c.setFillColorRGB(*BG)
+    c.setFillColorRGB(*CREAM)
     c.rect(0, H - 40 * mm, W, 40 * mm, fill=1, stroke=0)
+    logo_h = 22 * mm
+    logo_w = logo_h * (228.0 / 120.0)
+    c.drawImage(LOGO, 14 * mm, H - 32 * mm, width=logo_w, height=logo_h, mask="auto", preserveAspectRatio=True)
+    tx = 14 * mm + logo_w + 8 * mm
+    rounded(c, W - 48 * mm, H - 14 * mm, 32 * mm, 7 * mm, r=3, fill=BRAND)
+    c.setFillColorRGB(1, 1, 1)
+    c.setFont("UiB", 8)
+    c.drawCentredString(W - 32 * mm, H - 11.6 * mm, "ENSEIGNANT")
+    c.setFillColorRGB(*BRAND)
+    c.setFont("UiB", 16)
+    c.drawString(tx, H - 18 * mm, "Étalonnage de la jauge")
+    c.setFillColorRGB(*MUTED)
+    c.setFont("Ui", 8.5)
+    c.drawString(tx, H - 25.5 * mm, "HX711 U1  ·  DT1 GPIO 25  ·  SCK1 GPIO 33  ·  3,3 V  ·  10 SPS")
     stripe_h = 5.5 * mm
     y0 = H - 40 * mm - stripe_h
     x = 0
     step = 7 * mm
     while x < W:
-        c.setFillColorRGB(*AMBER)
+        c.setFillColorRGB(*BRAND)
         c.saveState()
         c.translate(x, y0)
         p = c.beginPath()
@@ -114,25 +131,6 @@ def draw():
         c.drawPath(p, fill=1, stroke=0)
         c.restoreState()
         x += step
-
-    c.setFillColorRGB(*AMBER)
-    c.setFont("UiB", 10)
-    c.drawString(16 * mm, H - 9 * mm, "Lycée Antonin Artaud  ·  BTS MS / FabLab")
-    c.setFillColorRGB(1, 0.85, 0.45)
-    rounded(c, W - 48 * mm, H - 13.5 * mm, 32 * mm, 7 * mm, r=3, fill=AMBER)
-    c.setFillColorRGB(*BG)
-    c.setFont("UiB", 8)
-    c.drawCentredString(W - 32 * mm, H - 11.2 * mm, "ENSEIGNANT")
-    c.setFillColorRGB(1, 1, 1)
-    c.setFont("UiB", 18)
-    c.drawString(16 * mm, H - 19.5 * mm, "Étalonnage de la jauge de contrainte")
-    c.setFillColorRGB(0.75, 0.80, 0.88)
-    c.setFont("Ui", 9.5)
-    c.drawString(
-        16 * mm,
-        H - 27.5 * mm,
-        "HX711 U1  ·  DT1 = GPIO 25  ·  SCK1 = GPIO 33  ·  3,3 V  ·  pont R3/R4 1 kΩ  ·  10 SPS",
-    )
 
     # Principe
     y = H - 54 * mm
@@ -242,7 +240,7 @@ def draw():
     for i, (a, b) in enumerate(rows):
         yy = table_top - i * rh
         if i == 0:
-            c.setFillColorRGB(*BG)
+            c.setFillColorRGB(*BRAND)
             c.roundRect(rx + 4 * mm, yy - 1.6 * mm, rw - 8 * mm, rh, 2, fill=1, stroke=0)
             c.setFillColorRGB(1, 1, 1)
             c.setFont("UiB", 8)

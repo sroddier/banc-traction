@@ -283,12 +283,15 @@ static void doTare(int nAvg = 16) {
   }
 }
 
-static bool doCalibrate(float refN) {
-  if (refN < 0.5f) return false;
+/* Échelle SIGNÉE : si la jauge descend en négatif, den < 0 → scale < 0
+ * et F = (brut − offset) / scale redevient positif (même sens que la masse). */
+static const char *doCalibrate(float refN) {
+  if (!tared) return "Échec : tare à vide d'abord (sans la masse)";
+  if (!(refN >= CAL_MIN_REF_N)) return "Échec : masse / force de référence trop faible";
   long acc = 0;
   int got = 0;
   uint32_t t0 = millis();
-  while (got < 20 && millis() - t0 < 2500) {
+  while (got < 24 && millis() - t0 < 4000) {
     long r;
     if (hxReadNb(&r)) {
       acc += r;
@@ -296,20 +299,27 @@ static bool doCalibrate(float refN) {
       lastRaw = r;
       lastHxMs = millis();
       hxOk = true;
+      hxEver = true;
     }
     pumpNet();
   }
-  if (got < 8) return false;
+  if (got < 10) return "Échec : trop peu d'échantillons HX711";
   long raw = acc / got;
+  lastRaw = raw;
   float den = (float)(raw - offsetRaw);
-  if (fabsf(den) < 50.0f) return false;
+  if (fabsf(den) < CAL_MIN_DELTA) {
+    return "Échec : le brut n'a presque pas bougé — masse trop légère, ou tare faite AVEC la masse";
+  }
   float sc = den / refN;
-  if (fabsf(sc) < SCALE_ABS_MIN || fabsf(sc) > SCALE_ABS_MAX) return false;
+  if (fabsf(sc) < SCALE_ABS_MIN || fabsf(sc) > SCALE_ABS_MAX) {
+    return "Échec : échelle hors plage (jauge trop peu / trop sensible)";
+  }
   scaleRawPerN = sc;
+  forceN = rawToN(raw);
   calibrated = true;
   prefs.putFloat("scale", scaleRawPerN);
   prefs.putBool("cal", true);
-  return true;
+  return nullptr;
 }
 
 static void doResetMeas() {
@@ -430,9 +440,31 @@ static void handleCmd(const char *json) {
     float refN = 0, refKg = 0;
     jsonFloat(json, "ref_N", &refN);
     jsonFloat(json, "ref_kg", &refKg);
-    if (refN < 0.5f && refKg >= 0.05f) refN = refKg * G_N_PER_KG;
-    bool ok = doCalibrate(refN);
-    sendStatus(ok ? "Étalonnage OK" : "Étalonnage échoué (masse ? tare ? ≥ 20 kg)");
+    if (refN < CAL_MIN_REF_N && refKg >= 0.005f) refN = refKg * G_N_PER_KG;
+    const char *err = doCalibrate(refN);
+    sendSample();
+    if (!err) {
+      char okmsg[160];
+      snprintf(okmsg, sizeof(okmsg),
+               "Étalonnage OK — échelle %.3f counts/N%s",
+               (double)scaleRawPerN,
+               scaleRawPerN < 0 ? " (jauge inverse, F>0)" : "");
+      sendStatus(okmsg);
+    } else {
+      sendStatus(err);
+    }
+    return;
+  }
+  if (!strcmp(cmd, "invert")) {
+    scaleRawPerN = -scaleRawPerN;
+    calibrated = true;
+    prefs.putFloat("scale", scaleRawPerN);
+    prefs.putBool("cal", true);
+    forceN = rawToN(lastRaw);
+    sendSample();
+    sendStatus(scaleRawPerN < 0
+               ? "Sens inversé — échelle négative (F>0 si la jauge descend)"
+               : "Sens inversé — échelle positive");
     return;
   }
   if (!strcmp(cmd, "setScale")) {

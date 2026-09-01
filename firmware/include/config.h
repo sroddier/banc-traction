@@ -8,7 +8,7 @@
  *   SCK1 → GPIO 33
  */
 
-#define FIRMWARE_VERSION "1.1.1"
+#define FIRMWARE_VERSION "1.2.1"
 
 // ----- Wi-Fi point d'accès (WPA2, mot de passe ≥ 8 caractères) -----
 #define WIFI_SSID        "TVM-TRACTION"
@@ -45,8 +45,10 @@
 // Échelle théorique CZL301 4 fils @ 3,3 V, gain 128. La jauge U1 (pont R3/R4 1 kΩ)
 // n'a PAS cette pente : étalonner en séance, masse ≥ 20 kg.
 #define DEFAULT_SCALE_RAW_PER_N  877.0f
-#define SCALE_ABS_MIN            50.0f
-#define SCALE_ABS_MAX            50000.0f
+#define SCALE_ABS_MIN            0.5f
+#define SCALE_ABS_MAX            2000000.0f
+#define CAL_MIN_REF_N            0.05f   // ~5 g
+#define CAL_MIN_DELTA            20.0f   // |brut − tare| minimum
 
 // ----- Détection rupture / fatigue -----
 #define BREAK_MIN_FMAX_N     40.0f

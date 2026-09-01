@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#ffb020">
+  <meta name="theme-color" content="#983830">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <title>Banc de traction TVM — Antonin Artaud</title>
   <link rel="stylesheet" href="css/app.css">
@@ -19,14 +19,17 @@
   <div class="wrap">
     <header class="head">
       <div class="brand">
-        <h1>Banc de traction</h1>
-        <p>SAUTER TVM 5000N230N · CZL301 500&nbsp;kg · Lycée Antonin Artaud · BTS MS / FabLab</p>
+        <img class="logo" src="img/logo-artaud.png" alt="Lycée Antonin Artaud" width="228" height="120">
+        <div>
+          <h1>Banc de traction</h1>
+          <p>SAUTER TVM 5000N230N · BTS MS / FabLab</p>
+        </div>
       </div>
       <div class="pills">
         <span class="pill sim" id="pill-link">Simulation</span>
         <span class="pill" id="pill-sps">SPS —</span>
         <span class="pill" id="pill-lim">Limite 4000 N</span>
-        <span class="pill" id="pill-ver">v1.1.1</span>
+        <span class="pill" id="pill-ver">v1.2.1</span>
       </div>
     </header>
 
@@ -96,21 +99,24 @@
         </div>
 
         <div class="view" id="view-calib">
-          <p class="note">Jauge sur <strong>HX711 U1</strong> (DT1 GPIO 25, SCK1 GPIO 33, 3,3&nbsp;V). Pont R3/R4 1&nbsp;kΩ. Limite logicielle <strong>4000&nbsp;N</strong> : au-delà, <strong>arrêter le TVM au pupitre</strong> (pas de relais). Plafond dur &lt;&nbsp;4900&nbsp;N. Masse d’étalonnage conseillée <strong>≥ 20&nbsp;kg</strong> — l’échelle 877 n’est pas celle de cette jauge.</p>
+          <p class="note">Jauge <strong>HX711 U1</strong> (DT1 GPIO 25, SCK1 GPIO 33, 3,3&nbsp;V). Ordre : <strong>1) tare à vide</strong> (sans masse) → <strong>2) poser la masse</strong> dans le sens traction → <strong>3) Étalonner</strong>. Une jauge inverse (F négatif) est normale : l’étalonnage enregistre une échelle négative et l’affichage redevient positif.</p>
           <div class="row rawline">
             <div>Brut HX711 <b id="raw">—</b></div>
+            <div>Δ brut (vs tare) <b id="delta">—</b></div>
             <div>σ récente <b id="sigma">—</b></div>
           </div>
+          <p class="note-relay hidden" id="polarity-hint">Force négative : jauge inverse. Pose la masse puis <strong>Étalonner</strong> (l’échelle passera en négatif, F&nbsp;&gt;&nbsp;0). Ou clique <strong>Inverser le sens</strong>.</p>
           <div class="row">
             <button class="act ok" type="button" id="btn-tare3">Tare à vide</button>
             <label class="field">Masse connue (kg)
-              <input id="ref-kg" type="number" step="0.001" min="0.05" value="20">
+              <input id="ref-kg" type="number" step="0.001" min="0.005" value="1">
             </label>
             <button class="act primary" type="button" id="btn-cal">Étalonner</button>
+            <button class="act" type="button" id="btn-invert">Inverser le sens</button>
           </div>
           <div class="row">
-            <label class="field">Échelle (counts / N)
-              <input id="scale" type="number" step="0.01" min="1" value="877">
+            <label class="field">Échelle (counts / N, peut être &lt; 0)
+              <input id="scale" type="number" step="any" value="877">
             </label>
             <button class="act" type="button" id="btn-scale">Appliquer échelle</button>
             <label class="field">Limite logicielle (N)
@@ -141,7 +147,7 @@
         </div>
       </section>
     </div>
-    <p class="foot">Wi-Fi AP <kbd>TVM-TRACTION</kbd> / mot de passe <kbd>traction1</kbd> · http://192.168.4.1 · WebSocket <kbd>/ws</kbd> · v1.1.1 · U1 DT=25 SCK=33 · pas de relais</p>
+    <p class="foot">Lycée Antonin Artaud · Wi-Fi AP <kbd>TVM-TRACTION</kbd> / <kbd>traction1</kbd> · http://192.168.4.1 · v1.2.0 · U1 DT=25 SCK=33 · pas de relais</p>
   </div>
   <script src="js/protocol.js"></script>
   <script src="js/chart.js"></script>

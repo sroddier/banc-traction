@@ -20,13 +20,17 @@ PASS = "traction1"
 APP_URL = "http://192.168.4.1"
 WIFI_QR = "WIFI:T:WPA;S:%s;P:%s;H:false;;" % (SSID, PASS)
 
-BG = (0x12 / 255.0, 0x15 / 255.0, 0x1C / 255.0)
-AMBER = (1.0, 0xB0 / 255.0, 0x20 / 255.0)
-RED = (0x9B / 255.0, 0x12 / 255.0, 0x12 / 255.0)
-INK = (0.12, 0.14, 0.18)
-MUTED = (0.35, 0.40, 0.48)
-OK = (0.15, 0.55, 0.40)
-CARD = (0.97, 0.97, 0.98)
+BRAND = (152 / 255.0, 56 / 255.0, 48 / 255.0)
+BRAND_DARK = (110 / 255.0, 36 / 255.0, 28 / 255.0)
+BG = (0.12, 0.11, 0.10)
+AMBER = BRAND
+RED = (0xC4 / 255.0, 0x16 / 255.0, 0x16 / 255.0)
+INK = (44 / 255.0, 28 / 255.0, 24 / 255.0)
+MUTED = (0.48, 0.40, 0.36)
+OK = (0.18, 0.42, 0.31)
+CARD = (0.99, 0.97, 0.95)
+CREAM = (0.965, 0.937, 0.910)
+LOGO = os.path.join(ROOT, "docs", "logo-artaud.png")
 
 
 def font(name, path):
@@ -95,19 +99,31 @@ def draw():
     c.setAuthor("Lycée Antonin Artaud — BTS MS / FabLab")
 
     # Fond
-    c.setFillColorRGB(1, 1, 1)
+    c.setFillColorRGB(*CREAM)
     c.rect(0, 0, W, H, fill=1, stroke=0)
 
-    # En-tête
-    c.setFillColorRGB(*BG)
-    c.rect(0, H - 42 * mm, W, 42 * mm, fill=1, stroke=0)
-    # bande hazard
+    # En-tête charte (papier + logo)
+    c.setFillColorRGB(*CREAM)
+    c.rect(0, H - 40 * mm, W, 40 * mm, fill=1, stroke=0)
+    logo_h = 22 * mm
+    logo_w = logo_h * (228.0 / 120.0)
+    c.drawImage(LOGO, 14 * mm, H - 32 * mm, width=logo_w, height=logo_h, mask="auto", preserveAspectRatio=True)
+    tx = 14 * mm + logo_w + 8 * mm
+    c.setFillColorRGB(*MUTED)
+    c.setFont("Ui", 9)
+    c.drawString(tx, H - 12 * mm, "BTS MS  /  FabLab  ·  v1.2.0")
+    c.setFillColorRGB(*BRAND)
+    c.setFont("UiB", 18)
+    c.drawString(tx, H - 20 * mm, "Banc de traction — fiche étudiant")
+    c.setFillColorRGB(*MUTED)
+    c.setFont("Ui", 9)
+    c.drawString(tx, H - 27 * mm, "SAUTER TVM 5000N230N  ·  l'appli mesure la force, elle ne commande pas le vérin")
     stripe_h = 6 * mm
-    y0 = H - 42 * mm - stripe_h
+    y0 = H - 40 * mm - stripe_h
     step = 7 * mm
     x = 0
     while x < W:
-        c.setFillColorRGB(*AMBER)
+        c.setFillColorRGB(*BRAND)
         c.saveState()
         c.translate(x, y0)
         p = c.beginPath()
@@ -119,21 +135,6 @@ def draw():
         c.drawPath(p, fill=1, stroke=0)
         c.restoreState()
         x += step
-    c.setFillColorRGB(*BG)
-    c.rect(0, y0, W, 0.4, fill=1, stroke=0)
-
-    c.setFillColorRGB(*AMBER)
-    c.setFont("UiB", 11)
-    c.drawString(16 * mm, H - 10 * mm, "Lycée Antonin Artaud  ·  BTS MS / FabLab")
-    c.setFillColorRGB(1, 1, 1)
-    c.setFont("UiB", 22)
-    c.drawString(16 * mm, H - 20 * mm, "Banc de traction — fiche étudiant")
-    c.setFillColorRGB(0.75, 0.80, 0.88)
-    c.setFont("Ui", 10)
-    c.drawString(16 * mm, H - 28 * mm, "SAUTER TVM 5000N230N   ·   l'appli mesure la force, elle ne commande pas le vérin")
-    c.setFillColorRGB(*AMBER)
-    c.setFont("UiB", 9)
-    c.drawRightString(W - 16 * mm, H - 10 * mm, "v1.1.1")
 
     # Alerte sécurité
     y = H - 58 * mm
@@ -191,7 +192,7 @@ def draw():
             "Mot de passe :  traction1",
             "Le téléphone dira « Pas d'Internet » : rester connecté.",
         ],
-        (0.23, 0.35, 0.62),
+        BRAND,
     )
     qr_card(
         14 * mm + card_w + 8 * mm,
@@ -233,7 +234,7 @@ def draw():
         y = y_start - row * 22 * mm
         c.setFillColorRGB(*AMBER)
         c.circle(x + 3.2 * mm, y + 1.6 * mm, 3.4 * mm, fill=1, stroke=0)
-        c.setFillColorRGB(*BG)
+        c.setFillColorRGB(1, 1, 1)
         c.setFont("UiB", 9)
         c.drawCentredString(x + 3.2 * mm, y + 0.2 * mm, str(i + 3))
         c.setFillColorRGB(*INK)

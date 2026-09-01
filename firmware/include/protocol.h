@@ -50,9 +50,10 @@
  * Client → ESP32  (commandes)
  * -------------------------------------------------------------------------
  * {"cmd":"tare"}
- * {"cmd":"calibrate","ref_kg":20.0}    // masse connue POSÉE, en kg (≥ 20 kg conseillé)
- * {"cmd":"calibrate","ref_N":196.13}
- * {"cmd":"setScale","scale":877.0}     // counts / N
+ * {"cmd":"calibrate","ref_kg":2.0}     // masse connue POSÉE (après tare à vide)
+ * {"cmd":"calibrate","ref_N":19.61}
+ * {"cmd":"setScale","scale":-142.0}    // counts / N (négatif = jauge inverse)
+ * {"cmd":"invert"}                     // inverse le signe de l'échelle
  * {"cmd":"setLimit","limit_N":4000}
  * {"cmd":"setMode","mode":"traction"}  // traction | fatigue | calib
  * {"cmd":"start"}

@@ -1,7 +1,7 @@
 /* Service worker : installable seulement en http://localhost (contexte sécurisé).
  * L'AP ESP32 est en HTTP clair : la page fonctionne sans SW, c'est normal.
  */
-var CACHE = "tvm-traction-v1.1.1";
+var CACHE = "tvm-traction-v1.2.2";
 var ASSETS = [
   "./",
   "./index.html",
@@ -10,7 +10,8 @@ var ASSETS = [
   "./js/chart.js",
   "./js/app.js",
   "./manifest.json",
-  "./icon.svg"
+  "./icon.svg",
+  "./img/logo-artaud.png"
 ];
 self.addEventListener("install", function (e) {
   e.waitUntil(caches.open(CACHE).then(function (c) { return c.addAll(ASSETS); }));
