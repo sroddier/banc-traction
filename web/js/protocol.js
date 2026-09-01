@@ -1,11 +1,12 @@
-/* Protocole JSON partagé avec firmware/include/protocol.h
+/* Protocole JSON partagé avec firmware/include/protocol.h  (v1.1)
  * Un objet par message WebSocket. Pas de champ déplacement.
  */
 (function (g) {
   "use strict";
   var TVM = g.TVM || {};
+  TVM.VERSION = "1.1.1";
   TVM.G = 9.80665;
-  TVM.WS_PORT = 81;
+  TVM.WS_PATH = "/ws";
   TVM.LIMIT_DEFAULT = 4000;
   TVM.HARD_CAP = 4899;
   TVM.SSID = "TVM-TRACTION";
@@ -20,12 +21,25 @@
   TVM.nToKg = function (n) { return n / TVM.G; };
   TVM.kgToN = function (kg) { return kg * TVM.G; };
 
+  TVM.wsUrls = function (loc) {
+    loc = loc || (typeof location !== "undefined" ? location : { protocol: "file:", hostname: "", port: "" });
+    var urls = [];
+    var path = TVM.WS_PATH;
+    var host = loc.hostname || "";
+    var port = loc.port || "";
+    var isEspHttp = loc.protocol && loc.protocol !== "file:" && (!port || port === "80");
+    if (isEspHttp && host) urls.push("ws://" + host + path);
+    if (host !== "192.168.4.1") urls.push("ws://192.168.4.1" + path);
+    return urls;
+  };
+
   TVM.cmd = {
     tare:      function () { return JSON.stringify({ cmd: "tare" }); },
     start:     function () { return JSON.stringify({ cmd: "start" }); },
     stop:      function () { return JSON.stringify({ cmd: "stop" }); },
     reset:     function () { return JSON.stringify({ cmd: "reset" }); },
     getStatus: function () { return JSON.stringify({ cmd: "getStatus" }); },
+    markBreak: function () { return JSON.stringify({ cmd: "break" }); },
     setMode:   function (m) { return JSON.stringify({ cmd: "setMode", mode: m }); },
     setSps:    function (s) { return JSON.stringify({ cmd: "setSps", sps: s }); },
     setUnit:   function (u) { return JSON.stringify({ cmd: "setUnit", unit: u }); },
@@ -83,11 +97,19 @@
         }
         this.st = 1;
         this.ext = f;
-        this.fmax = f;
         break;
     }
     return evt;
   };
 
+  TVM.csvEscape = function (n, dec) {
+    var s = Number(n).toFixed(dec);
+    return s;
+  };
+  TVM.csvEscapeFr = function (n, dec) {
+    return Number(n).toFixed(dec).replace(".", ",");
+  };
+
   g.TVM = TVM;
-})(window);
+  if (typeof module !== "undefined" && module.exports) module.exports = TVM;
+})(typeof globalThis !== "undefined" ? globalThis : this);

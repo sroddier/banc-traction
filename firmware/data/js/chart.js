@@ -9,8 +9,10 @@
     this.pad = { l: 56, r: 16, t: 18, b: 32 };
     this.w = 0;
     this.h = 0;
+    this.limitN = 4000;
   }
   Chart.prototype.clear = function () { this.pts = []; this.draw(); };
+  Chart.prototype.setLimit = function (n) { this.limitN = n; };
   Chart.prototype.push = function (t, N, evt) {
     this.pts.push({ t: t, N: N, evt: evt || "" });
     if (this.pts.length > this.maxPts) this.pts.splice(0, this.pts.length - this.maxPts);
@@ -26,6 +28,12 @@
     this.w = w;
     this.h = h;
     this.draw();
+  };
+  Chart.prototype.exportPng = function (name) {
+    var a = document.createElement("a");
+    a.href = this.c.toDataURL("image/png");
+    a.download = name || "courbe-traction.png";
+    a.click();
   };
   Chart.prototype.draw = function () {
     var ctx = this.ctx, w = this.w || this.c.clientWidth, h = this.h || this.c.clientHeight;
@@ -45,6 +53,7 @@
       if (pts[i].N > nMax) nMax = pts[i].N;
       if (pts[i].N < nMin) nMin = pts[i].N;
     }
+    if (this.limitN && this.limitN > nMax) nMax = this.limitN;
     nMax = nMax * 1.12 + 10;
     if (nMin > 0) nMin = 0;
     if (nMin < 0) nMin *= 1.12;
@@ -68,8 +77,25 @@
       ctx.stroke();
       ctx.fillText(nv.toFixed(0) + " N", p.l - 6, yy);
     }
+
+    if (this.limitN && this.limitN > nMin && this.limitN < nMax) {
+      var yl = y(this.limitN);
+      ctx.strokeStyle = "#ff4d4d";
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([6, 5]);
+      ctx.beginPath();
+      ctx.moveTo(p.l, yl);
+      ctx.lineTo(w - p.r, yl);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = "#ff4d4d";
+      ctx.textAlign = "left";
+      ctx.fillText("limite " + Math.round(this.limitN) + " N", p.l + 6, yl - 8);
+    }
+
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
+    ctx.fillStyle = "#8b9bb4";
     ctx.fillText(((tMax - tMin) / 1000).toFixed(1) + " s", w - p.r - 24, h - p.b + 10);
     ctx.textAlign = "left";
     ctx.fillText("0 s", p.l, h - p.b + 10);
@@ -99,6 +125,7 @@
       if (!pts[i].evt) continue;
       var col = pts[i].evt === "break" ? "#ff4d4d"
               : pts[i].evt === "limit" ? "#ff7a18"
+              : pts[i].evt === "hxfail" ? "#ff4d4d"
               : pts[i].evt === "cycle" ? "#3dd68c"
               : pts[i].evt === "peak" ? "#5b8cff"
               : "#c9d4e8";
@@ -117,4 +144,4 @@
     }
   };
   g.TvmChart = Chart;
-})(window);
+})(typeof window !== "undefined" ? window : this);

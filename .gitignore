@@ -1,0 +1,14 @@
+.pio/
+.vscode/
+.idea/
+*.elf
+*.map
+*.bin
+!firmware/data/**
+.DS_Store
+Thumbs.db
+Desktop.ini
+__pycache__/
+*.pyc
+.env
+*~

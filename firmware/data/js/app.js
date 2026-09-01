@@ -1,5 +1,6 @@
-/* Application atelier — traction / fatigue / calib
- * Fonctionne en file:// (simulation) et derrière l'AP ESP32.
+/* Application atelier — traction / fatigue / calib  v1.1
+ * file:// = simulation ; AP ESP32 = mesure réelle.
+ * Pas de relais : F ≥ 4000 N → alarme « ARRÊTER LA MACHINE ».
  */
 (function () {
   "use strict";
@@ -21,10 +22,11 @@
   var running = false;
   var broken = false;
   var forceN = 0;
+  var dispN = 0;
   var fmaxN = 0;
   var unit = "N";
   var limitN = TVM.LIMIT_DEFAULT;
-  var sps = 80;
+  var sps = 10;
   var samples = [];
   var cyclesCsv = [];
   var lastFmin = 0;
@@ -32,24 +34,92 @@
   var cyc = 0;
   var recT0 = 0;
   var statusCal = false;
+  var tared = false;
   var scaleVal = 877;
   var simBroken = false;
+  var overLive = false;
+  var overSeen = false;
+  var hxOk = true;
+  var hasRelay = false;
+  var lastRaw = 0;
+  var recentN = [];
+  var audioCtx = null;
+  var lastBeep = 0;
+  var csvFmt = "fr";
+  var EMA = 0.35;
+  var SAMPLE_CAP = 25000;
 
   function setPill(el, text, cls) {
     el.textContent = text;
     el.className = "pill" + (cls ? " " + cls : "");
   }
 
+  function unlockAudio() {
+    if (audioCtx) return;
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    } catch (e) {}
+  }
+
+  function beep() {
+    if (!audioCtx) return;
+    try {
+      if (audioCtx.state === "suspended") audioCtx.resume();
+      var o = audioCtx.createOscillator();
+      var g = audioCtx.createGain();
+      o.type = "square";
+      o.frequency.value = 880;
+      g.gain.value = 0.12;
+      o.connect(g);
+      g.connect(audioCtx.destination);
+      o.start();
+      o.stop(audioCtx.currentTime + 0.18);
+    } catch (e2) {}
+  }
+
+  function showAlarm() {
+    var el = $("alarm");
+    var live = overLive || !hxOk;
+    el.classList.toggle("hidden", !live);
+    document.body.classList.toggle("alarm-on", live);
+    $("warn-sticky").classList.toggle("hidden", !overSeen || overLive);
+    if (!hxOk) {
+      el.classList.add("hx");
+      $("alarm-title").textContent = "MESURE PERDUE";
+      $("alarm-sub").textContent = "ARRÊTER LE TVM au pupitre — plus de signal HX711";
+    } else if (overLive) {
+      el.classList.remove("hx");
+      $("alarm-title").textContent = "ARRÊTER LA MACHINE";
+      $("alarm-sub").textContent = "Force ≥ " + Math.round(limitN) + " N — STOP sur le pupitre TVM (pas de relais)";
+      var now = performance.now();
+      if (now > lastBeep + 700) {
+        lastBeep = now;
+        beep();
+        try { if (navigator.vibrate) navigator.vibrate([180, 80, 180]); } catch (e) {}
+      }
+    }
+  }
+
+  function rollingSd() {
+    var n = recentN.length;
+    if (n < 8) return NaN;
+    var s = 0, s2 = 0, i;
+    for (i = 0; i < n; i++) { s += recentN[i]; s2 += recentN[i] * recentN[i]; }
+    var mean = s / n;
+    var v = s2 / n - mean * mean;
+    return v > 0 ? Math.sqrt(v) : 0;
+  }
+
   function showForce() {
     var el = $("force-n");
     el.classList.remove("warn", "break");
     if (broken) el.classList.add("break");
-    else if (forceN >= limitN * 0.9) el.classList.add("warn");
+    else if (Math.abs(forceN) >= limitN * 0.9) el.classList.add("warn");
     if (unit === "kg") {
-      el.textContent = fmt(TVM.nToKg(forceN), 3);
+      el.textContent = fmt(TVM.nToKg(dispN), 3);
       $("force-unit").textContent = "kg";
     } else {
-      el.textContent = fmt(forceN, 1);
+      el.textContent = fmt(dispN, 1);
       $("force-unit").textContent = "N";
     }
     $("fmax").textContent = fmt(fmaxN, 1) + " N";
@@ -60,9 +130,14 @@
     $("last-fmax").textContent = lastFmax ? fmt(lastFmax, 1) + " N" : "—";
     $("pill-lim").textContent = "Limite " + Math.round(limitN) + " N";
     $("pill-sps").textContent = "SPS " + sps;
+    $("raw").textContent = lastRaw ? String(lastRaw) : "—";
+    var sd = rollingSd();
+    $("sigma").textContent = isNaN(sd) ? "—" : fmt(sd, 2) + " N";
     $("rec-info").textContent = running
       ? (samples.length + " pts · " + ((performance.now() - recT0) / 1000).toFixed(1) + " s")
       : "arrêté";
+    chart.setLimit(limitN);
+    showAlarm();
   }
 
   function setModeUi(m) {
@@ -81,16 +156,38 @@
     if (ws && ws.readyState === 1) ws.send(s);
   }
 
+  function capSamples() {
+    if (samples.length >= SAMPLE_CAP) samples.splice(0, 5000);
+    if (cyclesCsv.length > 20000) cyclesCsv.splice(0, 4000);
+  }
+
   function onSample(o) {
     forceN = +o.N || 0;
-    if (o.fmax != null) fmaxN = Math.max(fmaxN, +o.fmax);
-    if (forceN > fmaxN) fmaxN = forceN;
+    dispN = dispN + EMA * (forceN - dispN);
+    if (o.raw != null) lastRaw = +o.raw;
+    recentN.push(forceN);
+    if (recentN.length > 25) recentN.shift();
+    if (o.fmax != null && running) fmaxN = Math.max(fmaxN, +o.fmax);
+    if (running && forceN > fmaxN) fmaxN = forceN;
     if (o.cyc != null) cyc = +o.cyc;
     if (o.fmin != null) lastFmin = +o.fmin;
     if (o.sps) sps = +o.sps;
+    if (o.hx != null) hxOk = !!o.hx;
+    if (Math.abs(forceN) >= limitN) {
+      overLive = true;
+      overSeen = true;
+    } else if (o.over != null) {
+      overLive = !!o.over;
+    }
+    if (overLive) overSeen = true;
     var evt = o.evt || "";
     if (evt === "break") broken = true;
-    if (evt === "limit" || evt === "stop") running = false;
+    if (evt === "stop") running = false;
+    if (evt === "limit") {
+      overLive = true;
+      overSeen = true;
+    }
+    if (evt === "hxfail") hxOk = false;
     if (evt === "cycle") {
       lastFmin = +o.fmin;
       lastFmax = +o.fmax;
@@ -110,13 +207,14 @@
         kg: o.kg != null ? +o.kg : TVM.nToKg(forceN),
         evt: evt
       });
+      capSamples();
     }
     if (chart.pts.length % 2 === 0) chart.draw();
     showForce();
   }
 
   function onStatus(o) {
-    if (o.limit_N) limitN = +o.limit_N;
+    if (o.limit_N != null && o.limit_N !== "") limitN = +o.limit_N;
     if (o.sps) sps = +o.sps;
     if (o.scale) {
       scaleVal = +o.scale;
@@ -124,10 +222,26 @@
     }
     if (o.unit) unit = o.unit;
     if (o.cal != null) statusCal = !!o.cal;
+    if (o.tared != null) tared = !!o.tared;
+    if (o.run != null) running = !!o.run;
+    if (o.relay != null) {
+      hasRelay = !!o.relay;
+      $("note-relay").classList.toggle("hidden", hasRelay);
+    }
+    if (o.over != null) overLive = !!o.over;
+    if (o.seen) overSeen = true;
+    if (o.hx_ok != null) hxOk = !!o.hx_ok;
+    if (o.raw != null) lastRaw = +o.raw;
+    if (o.ver) $("pill-ver").textContent = "v" + o.ver;
     if (o.mode && o.mode !== mode) setModeUi(o.mode);
     $("limit").value = String(Math.round(limitN));
     $("unit").value = unit;
-    if (o.msg) $("status-msg").textContent = o.msg + (statusCal ? "" : " · non étalonné");
+    if (o.msg) {
+      var extra = "";
+      if (!statusCal) extra += " · non étalonné";
+      if (!tared) extra += " · tare à vide obligatoire";
+      $("status-msg").textContent = o.msg + extra;
+    }
     showForce();
   }
 
@@ -137,20 +251,10 @@
     else if (o.type === "status") onStatus(o);
   }
 
-  /* ---------- WebSocket ---------- */
-  function wsUrls() {
-    var urls = [];
-    var port = TVM.WS_PORT;
-    if (location.protocol !== "file:") {
-      urls.push("ws://" + location.hostname + ":" + port + "/");
-    }
-    urls.push("ws://192.168.4.1:" + port + "/");
-    return urls;
-  }
-
+  /* ---------- WebSocket (même port 80, chemin /ws) ---------- */
   function connect(i) {
     if (!wantLive) return;
-    var urls = wsUrls();
+    var urls = TVM.wsUrls(location);
     if (i >= urls.length) {
       startSim("Pas d'ESP32 — simulation. Joindre le Wi-Fi TVM-TRACTION ou ouvrir http://192.168.4.1");
       return;
@@ -171,8 +275,9 @@
       ws = sock;
       stopSim();
       sim = false;
+      hxOk = true;
       setPill($("pill-link"), "ESP32 " + sock.url.replace(/^ws:\/\//, "").replace(/\/$/, ""), "on");
-      $("status-msg").textContent = "Connecté au banc. Mesure réelle HX711.";
+      $("status-msg").textContent = "Connecté au banc. Tare à vide obligatoire. Pas de relais : STOP au pupitre si F ≥ 4000 N.";
       send(TVM.cmd.getStatus());
     };
     sock.onmessage = function (ev) { handleMsg(TVM.parse(ev.data)); };
@@ -192,6 +297,7 @@
   function startSim(msg) {
     stopSim();
     sim = true;
+    hxOk = true;
     setPill($("pill-link"), "Simulation", "sim");
     if (msg) $("status-msg").textContent = msg;
     simT0 = performance.now();
@@ -218,14 +324,12 @@
       } else if (mode === "calib") {
         N = (Math.random() - 0.5) * 1.2;
       } else {
-        // Courbe de traction typique : élastique, palier, rupture
         if (!running || simBroken) {
           N = broken ? fmaxN * 0.05 + Math.random() : (Math.random() - 0.5) * 1.5;
         } else {
-          var k = 220; // N/s
+          var k = 220;
           N = k * dt + 15 * Math.sin(dt * 3) + (Math.random() - 0.5) * 6;
           if (N > 1650 && !simBroken) {
-            // striction puis rupture
             N = 1650 - (dt - 1650 / k) * 80 + (Math.random() - 0.5) * 10;
             if (N < 1650 * 0.78) {
               simBroken = true;
@@ -235,10 +339,11 @@
               N = 40 + Math.random() * 10;
             }
           }
-          if (N >= limitN) {
+          if (Math.abs(N) >= limitN) {
             evt = "limit";
-            running = false;
-            N = limitN;
+            overLive = true;
+            overSeen = true;
+            N = N > 0 ? limitN : -limitN;
           }
         }
       }
@@ -252,7 +357,9 @@
         evt: evt,
         cyc: cyc,
         fmin: lastFmin,
-        fmax: mode === "fatigue" ? lastFmax : fmaxN
+        fmax: mode === "fatigue" ? lastFmax : fmaxN,
+        over: Math.abs(N) >= limitN,
+        hx: true
       };
       handleMsg(obj);
     }, 1000 / 20);
@@ -272,37 +379,71 @@
     var z = function (n) { return (n < 10 ? "0" : "") + n; };
     return d.getFullYear() + z(d.getMonth() + 1) + z(d.getDate()) + "-" + z(d.getHours()) + z(d.getMinutes());
   }
+  function csvNum(n, dec) {
+    return csvFmt === "fr" ? TVM.csvEscapeFr(n, dec) : TVM.csvEscape(n, dec);
+  }
+  function csvSep() { return csvFmt === "fr" ? ";" : ","; }
   function csvTraction() {
     var name = ($("name-epro").value || "eprouvette").replace(/[^\w\-]+/g, "_");
     var t0 = samples.length ? samples[0].t : 0;
-    var lines = ["time_ms,force_N,force_kg,event"];
+    var sep = csvSep();
+    var lines = ["time_ms" + sep + "force_N" + sep + "force_kg" + sep + "event"];
     for (var i = 0; i < samples.length; i++) {
       var s = samples[i];
-      lines.push((s.t - t0) + "," + s.N.toFixed(2) + "," + s.kg.toFixed(4) + "," + (s.evt || ""));
+      lines.push((s.t - t0) + sep + csvNum(s.N, 2) + sep + csvNum(s.kg, 4) + sep + (s.evt || ""));
     }
-    download("traction-" + name + "-" + stamp() + ".csv", lines.join("\n"));
+    download("traction-" + name + "-" + stamp() + ".csv", lines.join("\r\n"));
   }
   function csvFatigue() {
-    var lines = ["cycle,t_ms,Fmin_N,Fmax_N"];
+    var sep = csvSep();
+    var lines = ["cycle" + sep + "t_ms" + sep + "Fmin_N" + sep + "Fmax_N"];
     for (var i = 0; i < cyclesCsv.length; i++) {
       var c = cyclesCsv[i];
-      lines.push(c.cycle + "," + c.t + "," + Number(c.fmin).toFixed(2) + "," + Number(c.fmax).toFixed(2));
+      lines.push(c.cycle + sep + c.t + sep + csvNum(c.fmin, 2) + sep + csvNum(c.fmax, 2));
     }
-    download("fatigue-cycles-" + stamp() + ".csv", lines.join("\n"));
+    download("fatigue-cycles-" + stamp() + ".csv", lines.join("\r\n"));
+  }
+
+  function loadCalLog() {
+    try {
+      var arr = JSON.parse(localStorage.getItem("tvm-cal-log") || "[]");
+      if (!arr.length) {
+        $("cal-log").textContent = "Aucun étalonnage enregistré sur cet appareil.";
+        return;
+      }
+      var last = arr[arr.length - 1];
+      $("cal-log").textContent = "Dernier étalonnage : " + last.ts + " · " + last.kg + " kg · échelle " + last.scale + " counts/N (" + arr.length + " en mémoire).";
+    } catch (e) {
+      $("cal-log").textContent = "Journal d'étalonnage indisponible.";
+    }
+  }
+  function pushCalLog(kg, scale) {
+    try {
+      var arr = JSON.parse(localStorage.getItem("tvm-cal-log") || "[]");
+      arr.push({ ts: new Date().toISOString(), kg: kg, scale: scale });
+      if (arr.length > 30) arr = arr.slice(-30);
+      localStorage.setItem("tvm-cal-log", JSON.stringify(arr));
+    } catch (e) {}
+    loadCalLog();
   }
 
   /* ---------- Actions ---------- */
   function doTare() {
+    unlockAudio();
     if (sim) {
       forceN = 0;
+      dispN = 0;
+      tared = true;
       $("status-msg").textContent = "Tare simulation (zéro).";
       handleMsg({ type: "sample", t: Math.round(simT), N: 0, kg: 0, raw: 0, evt: "tare", cyc: cyc, fmin: lastFmin, fmax: fmaxN });
     } else send(TVM.cmd.tare());
   }
   function doStart() {
+    unlockAudio();
     running = true;
     broken = false;
     simBroken = false;
+    overSeen = false;
     samples = [];
     recT0 = performance.now();
     chart.clear();
@@ -310,17 +451,19 @@
     if (mode !== "fatigue") { fmaxN = Math.max(0, forceN); }
     if (!sim) send(TVM.cmd.start());
     $("status-msg").textContent = mode === "fatigue"
-      ? "Comptage cycles — lancer le Repeat du TVM."
-      : "Mesure traction en cours.";
+      ? "Comptage cycles — lancer le Repeat du TVM. Si F ≥ " + Math.round(limitN) + " N : STOP pupitre."
+      : "Mesure traction en cours. Si F ≥ " + Math.round(limitN) + " N : ARRÊTER le TVM au pupitre.";
   }
   function doStop() {
+    unlockAudio();
     running = false;
     if (sim) {
       handleMsg({ type: "sample", t: Math.round(simT), N: forceN, kg: TVM.nToKg(forceN), raw: 0, evt: "stop", cyc: cyc, fmin: lastFmin, fmax: fmaxN });
-      $("status-msg").textContent = "STOP simulation (pas de relais).";
+      $("status-msg").textContent = "Enregistrement arrêté (simulation). Le TVM se stoppe au pupitre.";
     } else send(TVM.cmd.stop());
   }
   function doReset() {
+    if (!confirm("Remettre à zéro la courbe, Fmax et les cycles ?")) return;
     running = false;
     broken = false;
     fmaxN = 0;
@@ -329,6 +472,8 @@
     lastFmax = 0;
     samples = [];
     cyclesCsv = [];
+    overSeen = false;
+    overLive = false;
     fat.reset();
     chart.clear();
     if (sim) {
@@ -343,11 +488,12 @@
     running = false;
     var obj = {
       type: "sample", t: Math.round(sim ? simT : performance.now()),
-      N: forceN, kg: TVM.nToKg(forceN), raw: 0, evt: "break",
+      N: forceN, kg: TVM.nToKg(forceN), raw: lastRaw, evt: "break",
       cyc: cyc, fmin: lastFmin, fmax: fmaxN
     };
     if (sim) handleMsg(obj);
     else {
+      send(TVM.cmd.markBreak());
       samples.push({ t: obj.t, N: forceN, kg: obj.kg, evt: "break" });
       chart.push(obj.t, forceN, "break");
       chart.draw();
@@ -357,8 +503,19 @@
   }
   function applyMode(m) {
     setModeUi(m);
-    doReset();
+    running = false;
+    broken = false;
+    fmaxN = 0;
+    cyc = 0;
+    lastFmin = 0;
+    lastFmax = 0;
+    samples = [];
+    cyclesCsv = [];
+    overSeen = false;
+    fat.reset();
+    chart.clear();
     if (!sim) send(TVM.cmd.setMode(m));
+    showForce();
   }
 
   $("tab-traction").onclick = function () { applyMode("traction"); };
@@ -377,20 +534,60 @@
   $("btn-rupture").onclick = doRupture;
   $("btn-csv").onclick = csvTraction;
   $("btn-csv2").onclick = csvFatigue;
+  $("btn-png").onclick = function () {
+    var name = ($("name-epro").value || "eprouvette").replace(/[^\w\-]+/g, "_");
+    chart.exportPng("traction-" + name + "-" + stamp() + ".png");
+  };
+  $("btn-sim-over").onclick = function () {
+    unlockAudio();
+    if (!sim) {
+      $("status-msg").textContent = "« Simuler F ≥ 4000 N » n'est disponible qu'en simulation.";
+      return;
+    }
+    running = true;
+    forceN = limitN + 80;
+    dispN = forceN;
+    fmaxN = Math.max(fmaxN, forceN);
+    handleMsg({
+      type: "sample",
+      t: Math.round(simT),
+      N: forceN,
+      kg: TVM.nToKg(forceN),
+      raw: 0,
+      evt: "limit",
+      cyc: cyc,
+      fmin: lastFmin,
+      fmax: fmaxN,
+      over: true,
+      hx: true
+    });
+    $("status-msg").textContent = "Simulation de surcharge — en réel : STOP au pupitre TVM.";
+  };
 
   $("btn-cal").onclick = function () {
     var kg = parseFloat($("ref-kg").value);
     if (!(kg > 0)) return;
+    if (kg < 20 && !confirm("Masse < 20 kg (1 % de la cellule 500 kg) : l'échelle sera imprécise. Continuer ?")) return;
     if (sim) {
       scaleVal = 877;
       statusCal = true;
       $("scale").value = "877";
+      pushCalLog(kg, 877);
       $("status-msg").textContent = "Étalonnage simulé (masse " + kg + " kg). Sur le banc réel, poser la masse puis cliquer.";
-    } else send(TVM.cmd.calibrate(kg, TVM.kgToN(kg)));
+    } else {
+      send(TVM.cmd.calibrate(kg, TVM.kgToN(kg)));
+      pushCalLog(kg, scaleVal);
+    }
   };
   $("btn-scale").onclick = function () {
     var sc = parseFloat($("scale").value);
-    if (!(sc > 1)) return;
+    if (!(Math.abs(sc) > 1)) return;
+    if (Math.abs(sc) < 50 || Math.abs(sc) > 50000) {
+      $("status-msg").textContent = "Échelle hors plage (50–50000 counts/N).";
+      return;
+    }
+    if (Math.abs(Math.abs(sc) - 877) > 400 &&
+        !confirm("Échelle " + sc + " loin de 877 counts/N théorique. Enregistrer ?")) return;
     scaleVal = sc;
     if (!sim) send(TVM.cmd.setScale(sc));
     $("status-msg").textContent = "Échelle " + sc + " counts/N";
@@ -401,15 +598,15 @@
     if (n > TVM.HARD_CAP) n = TVM.HARD_CAP;
     limitN = n;
     $("limit").value = String(n);
+    chart.setLimit(limitN);
+    chart.draw();
     if (!sim) send(TVM.cmd.setLimit(n));
     showForce();
-    $("status-msg").textContent = "Limite logicielle " + n + " N (plafond " + TVM.HARD_CAP + " N).";
+    $("status-msg").textContent = "Limite logicielle " + n + " N — au-delà : ARRÊTER le TVM au pupitre (pas de relais).";
   };
   $("btn-sps").onclick = function () {
-    var v = $("sps").value;
-    if (v === "auto") sps = 80;
-    else sps = parseInt(v, 10);
-    if (!sim && v !== "auto") send(TVM.cmd.setSps(sps));
+    sps = parseInt($("sps").value, 10) || 10;
+    if (!sim) send(TVM.cmd.setSps(sps));
     showForce();
   };
   $("unit").onchange = function () {
@@ -417,30 +614,42 @@
     if (!sim) send(TVM.cmd.setUnit(unit));
     showForce();
   };
+  $("csv-fmt").onchange = function () {
+    csvFmt = $("csv-fmt").value;
+    try { localStorage.setItem("tvm-csv-fmt", csvFmt); } catch (e) {}
+  };
 
   $("btn-reconnect").onclick = function () {
+    unlockAudio();
     wantLive = true;
     stopSim();
     sim = false;
     setPill($("pill-link"), "Connexion…", "");
-    $("status-msg").textContent = "Connexion WebSocket (port 81)…";
+    $("status-msg").textContent = "Connexion WebSocket /ws …";
     connect(0);
   };
   $("btn-sim").onclick = function () {
+    unlockAudio();
     wantLive = false;
     try { if (ws) ws.close(); } catch (e) {}
     ws = null;
     startSim("Mode simulation forcé. Ouvrir ce fichier suffit, l'ESP32 n'est pas requis.");
   };
 
+  document.body.addEventListener("click", unlockAudio, { once: true });
+
   window.addEventListener("resize", function () { chart.resize(); });
   chart.resize();
+  chart.setLimit(limitN);
   setModeUi("traction");
   showForce();
+  loadCalLog();
 
   try {
     var saved = localStorage.getItem("tvm-epro");
     if (saved) $("name-epro").value = saved;
+    var cf = localStorage.getItem("tvm-csv-fmt");
+    if (cf) { csvFmt = cf; $("csv-fmt").value = cf; }
   } catch (e) {}
   $("name-epro").addEventListener("change", function () {
     try { localStorage.setItem("tvm-epro", $("name-epro").value); } catch (e2) {}
@@ -453,7 +662,6 @@
     }
   }
 
-  // file:// ou pas d'ESP32 → simulation immédiate ; sinon on tente le WS
   if (location.protocol === "file:") {
     startSim("Fichier local — simulation. Pour le banc : joindre TVM-TRACTION puis http://192.168.4.1");
   } else {

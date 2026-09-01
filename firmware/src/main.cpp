@@ -1,27 +1,21 @@
-/* Banc de traction — ESP32 + HX711
+/* Banc de traction — ESP32 + HX711  v1.1.1
  * Lycée Antonin Artaud, BTS MS / FabLab
- * SAUTER TVM 5000N230N · CZL301 500 kg · pas d'extensomètre
+ * SAUTER TVM 5000N230N · jauge sur HX711 U1 · pas d'extensomètre
  *
- * Câblage (HX711 et GPIO à 3,3 V UNIQUEMENT) :
- *   CZL301 rouge  → E+   HX711
- *   CZL301 noir   → E-   HX711
- *   CZL301 vert   → A+   HX711
- *   CZL301 blanc  → A-   HX711
- *   CZL301 jaune  → GND  (blindage)
- *   HX711 VCC     → 3V3  ESP32     (pas 5 V : DT/SCK iraient en 5 V)
- *   HX711 GND     → GND  ESP32
- *   HX711 DT      → GPIO 16
- *   HX711 SCK     → GPIO 17
- *   HX711 RATE    → GPIO 33 (optionnel)
- *   Relais STOP   → GPIO 26 via transistor (voir README)
+ * Carte EasyEDA ESP32-WROOM-32 DevKitC-V4 + 2× XW-HX711 @ 3,3 V
+ *   U1 jauge 3 fils (lue) : DT1 = GPIO 25, SCK1 = GPIO 33
+ *   U2 cellule 4 fils (non lue) : DT2 = GPIO 14, SCK2 = GPIO 26
+ *   VCC HX711 → 3V3   GND → GND     (pas 5 V)
+ *
+ * Relais désactivé : dépassement 4000 N = alarme « ARRÊTER LA MACHINE ».
  */
 
 #include <Arduino.h>
 #include <WiFi.h>
-#include <WebServer.h>
-#include <WebSocketsServer.h>
 #include <LittleFS.h>
 #include <Preferences.h>
+#include <DNSServer.h>
+#include <ESPAsyncWebServer.h>
 #include <math.h>
 
 #include "config.h"
@@ -34,32 +28,32 @@ static bool hxReady() {
   return digitalRead(PIN_HX711_DT) == LOW;
 }
 
-static long hxReadRaw() {
-  // 24 bits, complément à 2, 25e impulsion = gain 128
+static bool hxReadRaw(long *out) {
+  uint32_t t0 = micros();
   while (digitalRead(PIN_HX711_DT) == HIGH) {
-    delayMicroseconds(10);
+    if (micros() - t0 > 200000UL) return false;
   }
   uint32_t v = 0;
   noInterrupts();
   for (int i = 0; i < 24; i++) {
     digitalWrite(PIN_HX711_SCK, HIGH);
-    delayMicroseconds(1);
+    delayMicroseconds(2);
     v = (v << 1) | (uint32_t)digitalRead(PIN_HX711_DT);
     digitalWrite(PIN_HX711_SCK, LOW);
-    delayMicroseconds(1);
+    delayMicroseconds(2);
   }
   digitalWrite(PIN_HX711_SCK, HIGH);
-  delayMicroseconds(1);
+  delayMicroseconds(2);
   digitalWrite(PIN_HX711_SCK, LOW);
   interrupts();
-  if (v & 0x800000UL) v |= 0xFF000000UL;  // signe
-  return (long)v;
+  if (v & 0x800000UL) v |= 0xFF000000UL;
+  *out = (long)v;
+  return true;
 }
 
 static bool hxReadNb(long *out) {
   if (!hxReady()) return false;
-  *out = hxReadRaw();
-  return true;
+  return hxReadRaw(out);
 }
 
 // ---------------------------------------------------------------------------
@@ -68,20 +62,27 @@ static bool hxReadNb(long *out) {
 enum Mode { MODE_TRACTION, MODE_FATIGUE, MODE_CALIB };
 
 static Preferences prefs;
-static WebServer http(80);
-static WebSocketsServer ws(81);
+static AsyncWebServer http(80);
+static AsyncWebSocket ws("/ws");
+static DNSServer dns;
 
 static float scaleRawPerN = DEFAULT_SCALE_RAW_PER_N;
 static long  offsetRaw    = 0;
 static float limitN       = FORCE_LIMIT_DEFAULT_N;
 static bool  calibrated   = false;
-static int   sps          = SPS_FAST;
+static bool  tared        = false;
+static int   sps          = SPS_SLOW;
 static Mode  mode         = MODE_TRACTION;
 static char  unitStr[4]   = "N";
 
 static bool  running      = false;
 static bool  stopLatched  = false;
 static bool  broken       = false;
+static bool  overLive     = false;
+static bool  overSeen     = false;
+static uint8_t overCount  = 0;
+static bool  hxOk         = false;
+static bool  hxFailLatched = false;
 
 static float forceN       = 0;
 static float fmaxN        = 0;
@@ -90,45 +91,58 @@ static float cycMaxN      = 0;
 static uint32_t cycles    = 0;
 static long  lastRaw      = 0;
 
-static uint32_t tStartMs  = 0;
-static char lastEvt[12]   = "";
+static uint32_t tStartMs     = 0;
+static uint32_t lastHxMs     = 0;
+static uint32_t lastTxMs     = 0;
+static uint32_t lastStatusMs = 0;
+static uint32_t lastLedMs    = 0;
+static uint32_t bootMs       = 0;
+static bool    hxEver        = false;
+static char lastEvt[12]      = "";
 
-// Fatigue : machine à états pic / creux
 enum FatSt { FAT_SEEK_RISE, FAT_SEEK_PEAK, FAT_SEEK_FALL, FAT_SEEK_TROUGH };
 static FatSt fatSt = FAT_SEEK_RISE;
-static float fatExt = 0;  // extremum local
-
-static uint32_t lastStatusMs = 0;
-static uint32_t bootMs       = 0;
+static float fatExt = 0;
 
 // ---------------------------------------------------------------------------
-// Relais STOP
+// Relais STOP (no-op matériel si RELAY_INSTALLED 0)
 // ---------------------------------------------------------------------------
 static void applyStopPin(bool on) {
   stopLatched = on;
+#if RELAY_INSTALLED
 #if STOP_ACTIVE_HIGH
   digitalWrite(PIN_STOP, on ? HIGH : LOW);
 #else
   digitalWrite(PIN_STOP, on ? LOW : HIGH);
 #endif
-  digitalWrite(PIN_LED, on ? LOW : HIGH);  // LED onboard souvent actif bas
+#endif
 }
 
-static void tripStop(const char *evt) {
-  applyStopPin(true);
-  running = false;
+static void setEvt(const char *evt) {
   strncpy(lastEvt, evt, sizeof(lastEvt) - 1);
+  lastEvt[sizeof(lastEvt) - 1] = 0;
+}
+
+static void ledAlarm(bool on) {
+  // Onboard souvent actif bas
+  digitalWrite(PIN_LED, on ? LOW : HIGH);
 }
 
 // ---------------------------------------------------------------------------
 // Conversion
 // ---------------------------------------------------------------------------
 static float rawToN(long raw) {
-  if (scaleRawPerN < 1e-6f) return 0;
+  if (fabsf(scaleRawPerN) < 1e-6f) return 0;
   return (float)(raw - offsetRaw) / scaleRawPerN;
 }
 
 static float nToKg(float n) { return n / G_N_PER_KG; }
+
+static void pumpNet() {
+  dns.processNextRequest();
+  ws.cleanupClients();
+  yield();
+}
 
 // ---------------------------------------------------------------------------
 // JSON mini-extracteur
@@ -155,7 +169,6 @@ static bool jsonStr(const char *json, const char *key, char *out, size_t n) {
     out[i] = 0;
     return true;
   }
-  // valeur non quotée (identifiant)
   size_t i = 0;
   while (*p && *p != ',' && *p != '}' && *p != ' ' && i + 1 < n) out[i++] = *p++;
   out[i] = 0;
@@ -179,25 +192,7 @@ static bool jsonInt(const char *json, const char *key, int *out) {
 // ---------------------------------------------------------------------------
 // Émission
 // ---------------------------------------------------------------------------
-static char txbuf[384];
-
-static void wsBroadcast(const char *s) { ws.broadcastTXT(s); }
-
-static void sendSample() {
-  snprintf(txbuf, sizeof(txbuf),
-           "{\"type\":\"sample\",\"t\":%lu,\"N\":%.2f,\"kg\":%.3f,\"raw\":%ld,"
-           "\"evt\":\"%s\",\"cyc\":%lu,\"fmin\":%.2f,\"fmax\":%.2f}",
-           (unsigned long)millis(),
-           (double)forceN,
-           (double)nToKg(forceN),
-           lastRaw,
-           lastEvt,
-           (unsigned long)cycles,
-           (double)cycMinN,
-           (double)fmaxN);
-  wsBroadcast(txbuf);
-  lastEvt[0] = 0;  // one-shot
-}
+static char txbuf[640];
 
 static const char *modeStr() {
   if (mode == MODE_FATIGUE) return "fatigue";
@@ -205,11 +200,38 @@ static const char *modeStr() {
   return "traction";
 }
 
+static void sendSample() {
+  if (ws.count() == 0 && lastEvt[0] == 0) {
+    lastEvt[0] = 0;
+    return;
+  }
+  snprintf(txbuf, sizeof(txbuf),
+           "{\"type\":\"sample\",\"t\":%lu,\"N\":%.2f,\"kg\":%.3f,\"raw\":%ld,"
+           "\"evt\":\"%s\",\"cyc\":%lu,\"fmin\":%.2f,\"fmax\":%.2f,"
+           "\"over\":%s,\"hx\":%s}",
+           (unsigned long)millis(),
+           (double)forceN,
+           (double)nToKg(forceN),
+           lastRaw,
+           lastEvt,
+           (unsigned long)cycles,
+           (double)cycMinN,
+           (double)fmaxN,
+           overLive ? "true" : "false",
+           hxFailLatched ? "false" : "true");
+  ws.textAll(txbuf);
+  lastEvt[0] = 0;
+  lastTxMs = millis();
+}
+
 static void sendStatus(const char *msg) {
   snprintf(txbuf, sizeof(txbuf),
-           "{\"type\":\"status\",\"ok\":true,\"mode\":\"%s\",\"sps\":%d,"
-           "\"scale\":%.4f,\"offset\":%ld,\"limit_N\":%.1f,\"hard_N\":%.1f,"
-           "\"unit\":\"%s\",\"cal\":%s,\"stop\":%s,\"msg\":\"%s\"}",
+           "{\"type\":\"status\",\"ok\":true,\"ver\":\"%s\",\"mode\":\"%s\","
+           "\"sps\":%d,\"scale\":%.4f,\"offset\":%ld,\"limit_N\":%.1f,"
+           "\"hard_N\":%.1f,\"unit\":\"%s\",\"cal\":%s,\"tared\":%s,"
+           "\"run\":%s,\"relay\":%s,\"stop\":%s,\"over\":%s,\"seen\":%s,"
+           "\"hx_ok\":%s,\"raw\":%ld,\"msg\":\"%s\"}",
+           FIRMWARE_VERSION,
            modeStr(),
            sps,
            (double)scaleRawPerN,
@@ -218,9 +240,20 @@ static void sendStatus(const char *msg) {
            (double)FORCE_HARD_CAP_N,
            unitStr,
            calibrated ? "true" : "false",
+           tared ? "true" : "false",
+           running ? "true" : "false",
+#if RELAY_INSTALLED
+           "true",
+#else
+           "false",
+#endif
            stopLatched ? "true" : "false",
+           overLive ? "true" : "false",
+           overSeen ? "true" : "false",
+           hxFailLatched ? "false" : "true",
+           lastRaw,
            msg ? msg : "Prêt");
-  wsBroadcast(txbuf);
+  ws.textAll(txbuf);
 }
 
 // ---------------------------------------------------------------------------
@@ -235,18 +268,23 @@ static void doTare(int nAvg = 16) {
     if (hxReadNb(&r)) {
       acc += r;
       got++;
+      lastRaw = r;
+      lastHxMs = millis();
+      hxOk = true;
     }
-    yield();
+    pumpNet();
   }
   if (got > 0) {
     offsetRaw = acc / got;
+    tared = true;
     prefs.putLong("offset", offsetRaw);
-    strncpy(lastEvt, "tare", sizeof(lastEvt) - 1);
+    prefs.putBool("tared", true);
+    setEvt("tare");
   }
 }
 
-static void doCalibrate(float refN) {
-  if (refN < 0.5f) return;
+static bool doCalibrate(float refN) {
+  if (refN < 0.5f) return false;
   long acc = 0;
   int got = 0;
   uint32_t t0 = millis();
@@ -255,17 +293,23 @@ static void doCalibrate(float refN) {
     if (hxReadNb(&r)) {
       acc += r;
       got++;
+      lastRaw = r;
+      lastHxMs = millis();
+      hxOk = true;
     }
-    yield();
+    pumpNet();
   }
-  if (got < 8) return;
+  if (got < 8) return false;
   long raw = acc / got;
   float den = (float)(raw - offsetRaw);
-  if (fabsf(den) < 50.0f) return;
-  scaleRawPerN = den / refN;  // signe conservé : force > 0 dans le sens de l'étalonnage
+  if (fabsf(den) < 50.0f) return false;
+  float sc = den / refN;
+  if (fabsf(sc) < SCALE_ABS_MIN || fabsf(sc) > SCALE_ABS_MAX) return false;
+  scaleRawPerN = sc;
   calibrated = true;
   prefs.putFloat("scale", scaleRawPerN);
   prefs.putBool("cal", true);
+  return true;
 }
 
 static void doResetMeas() {
@@ -274,6 +318,10 @@ static void doResetMeas() {
   cycMaxN = 0;
   cycles = 0;
   broken = false;
+  overLive = false;
+  overSeen = false;
+  overCount = 0;
+  hxFailLatched = false;
   fatSt = FAT_SEEK_RISE;
   fatExt = 0;
   running = false;
@@ -281,24 +329,23 @@ static void doResetMeas() {
 }
 
 // ---------------------------------------------------------------------------
-// Rupture + fatigue
+// Rupture + fatigue (uniquement pendant l'enregistrement)
 // ---------------------------------------------------------------------------
 static void detectBreak(float f) {
+  if (!running) return;
   if (mode != MODE_TRACTION) return;
   if (broken) return;
   if (fmaxN < BREAK_MIN_FMAX_N) return;
   if (f <= fmaxN * (1.0f - BREAK_DROP_RATIO)) {
     broken = true;
-    strncpy(lastEvt, "break", sizeof(lastEvt) - 1);
+    setEvt("break");
     running = false;
-    // On ne coupe pas le relais sur rupture : le TVM a ses fins de course.
-    // L'opérateur arrête le vérin. STOP reste dispo manuellement.
   }
 }
 
 static void detectCycle(float f) {
+  if (!running) return;
   if (mode != MODE_FATIGUE) return;
-  // Amplitude min. : on s'appuie sur l'hystérésis fixe.
   switch (fatSt) {
     case FAT_SEEK_RISE:
       fatExt = f;
@@ -312,7 +359,7 @@ static void detectCycle(float f) {
       if (f < fatExt - FATIGUE_HYST_N) {
         cycMaxN = fatExt;
         fmaxN = fatExt;
-        strncpy(lastEvt, "peak", sizeof(lastEvt) - 1);
+        setEvt("peak");
         fatSt = FAT_SEEK_FALL;
         fatExt = f;
       }
@@ -326,24 +373,35 @@ static void detectCycle(float f) {
       }
       break;
     case FAT_SEEK_TROUGH:
-      // Un cycle = un pic puis un creux, amplitude suffisante
       if (cycMaxN - cycMinN >= FATIGUE_MIN_AMP_N) {
         cycles++;
-        strncpy(lastEvt, "cycle", sizeof(lastEvt) - 1);
+        setEvt("cycle");
       }
       fatSt = FAT_SEEK_PEAK;
       fatExt = f;
-      cycMaxN = f;
       break;
   }
 }
 
 // ---------------------------------------------------------------------------
-// Limite de force
+// Limite de force — sans relais : alarme, l'enregistrement continue
 // ---------------------------------------------------------------------------
 static void enforceLimit(float f) {
-  if (f >= limitN || f >= FORCE_HARD_CAP_N) {
-    tripStop("limit");
+  float a = fabsf(f);
+  if (a >= limitN || a >= FORCE_HARD_CAP_N) {
+    if (overCount < 10) overCount++;
+    if (overCount >= OVER_CONFIRM) {
+      if (!overLive) setEvt("limit");
+      overLive = true;
+      overSeen = true;
+#if RELAY_INSTALLED
+      applyStopPin(true);
+      running = false;
+#endif
+    }
+  } else if (a < limitN * 0.95f && a < FORCE_HARD_CAP_N * 0.95f) {
+    overCount = 0;
+    overLive = false;
   }
 }
 
@@ -364,7 +422,8 @@ static void handleCmd(const char *json) {
 
   if (!strcmp(cmd, "tare")) {
     doTare();
-    sendStatus("Tare OK");
+    sendSample();
+    sendStatus(tared ? "Tare OK — vérifier à vide ~0 N" : "Tare échouée (HX711 ?)");
     return;
   }
   if (!strcmp(cmd, "calibrate")) {
@@ -372,18 +431,20 @@ static void handleCmd(const char *json) {
     jsonFloat(json, "ref_N", &refN);
     jsonFloat(json, "ref_kg", &refKg);
     if (refN < 0.5f && refKg >= 0.05f) refN = refKg * G_N_PER_KG;
-    doCalibrate(refN);
-    sendStatus(calibrated ? "Étalonnage OK" : "Étalonnage échoué");
+    bool ok = doCalibrate(refN);
+    sendStatus(ok ? "Étalonnage OK" : "Étalonnage échoué (masse ? tare ? ≥ 20 kg)");
     return;
   }
   if (!strcmp(cmd, "setScale")) {
     float sc;
-    if (jsonFloat(json, "scale", &sc) && sc > 1.0f) {
+    if (jsonFloat(json, "scale", &sc) && fabsf(sc) >= SCALE_ABS_MIN && fabsf(sc) <= SCALE_ABS_MAX) {
       scaleRawPerN = sc;
       calibrated = true;
       prefs.putFloat("scale", scaleRawPerN);
       prefs.putBool("cal", true);
       sendStatus("Échelle enregistrée");
+    } else {
+      sendStatus("Échelle hors plage");
     }
     return;
   }
@@ -407,28 +468,53 @@ static void handleCmd(const char *json) {
     return;
   }
   if (!strcmp(cmd, "start")) {
+#if RELAY_INSTALLED
+    if (overLive) {
+      sendStatus("STOP maintenu : |F| encore au-dessus de la limite");
+      return;
+    }
     applyStopPin(false);
+#endif
     broken = false;
     running = true;
     tStartMs = millis();
     if (mode == MODE_TRACTION) {
       fmaxN = forceN > 0 ? forceN : 0;
     }
-    sendStatus("Mesure démarrée");
+    sendStatus("Mesure démarrée — le TVM se commande au pupitre");
     return;
   }
   if (!strcmp(cmd, "stop")) {
-    tripStop("stop");
+    running = false;
+    setEvt("stop");
+#if RELAY_INSTALLED
+    applyStopPin(true);
+    sendSample();
     sendStatus("STOP relais");
+#else
+    sendSample();
+    sendStatus("Enregistrement arrêté (pas de relais : STOP au pupitre TVM)");
+#endif
     return;
   }
   if (!strcmp(cmd, "reset")) {
-    applyStopPin(false);
+#if RELAY_INSTALLED
+    if (!overLive) applyStopPin(false);
+#endif
     doResetMeas();
     sendStatus("RAZ mesure");
     return;
   }
+  if (!strcmp(cmd, "break")) {
+    broken = true;
+    running = false;
+    setEvt("break");
+    sendSample();
+    sendStatus("Rupture marquée (opérateur)");
+    return;
+  }
   if (!strcmp(cmd, "setSps")) {
+#if HX711_RATE_WIRED
     int v = sps;
     jsonInt(json, "sps", &v);
     if (v >= 40) {
@@ -440,6 +526,10 @@ static void handleCmd(const char *json) {
     }
     prefs.putUChar("sps", (uint8_t)sps);
     sendStatus("Cadence");
+#else
+    sps = SPS_SLOW;
+    sendStatus("RATE non câblé — 10 SPS (module)");
+#endif
     return;
   }
   if (!strcmp(cmd, "setUnit")) {
@@ -447,24 +537,26 @@ static void handleCmd(const char *json) {
     jsonStr(json, "unit", u, sizeof(u));
     if (!strcmp(u, "kg")) strncpy(unitStr, "kg", sizeof(unitStr));
     else strncpy(unitStr, "N", sizeof(unitStr));
+    unitStr[sizeof(unitStr) - 1] = 0;
     sendStatus("Unité");
     return;
   }
   if (!strcmp(cmd, "getStatus")) {
-    sendStatus("Prêt");
+    sendStatus(tared ? "Prêt — tare à vide en début de séance" : "Tare à vide obligatoire");
     return;
   }
 }
 
 // ---------------------------------------------------------------------------
-// HTTP / LittleFS
+// HTTP / LittleFS / portail captif
 // ---------------------------------------------------------------------------
 static const char FALLBACK_HTML[] PROGMEM = R"HTML(
 <!DOCTYPE html><html lang="fr"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>TVM Traction</title>
 <body style="font-family:sans-serif;background:#12151c;color:#eee;padding:2rem">
 <h1>Banc de traction TVM</h1>
-<p>Le système de fichiers LittleFS est vide. Flashez les pages web :</p>
+<p>LittleFS vide. Flashez les pages web :</p>
 <pre>cd firmware
 pio run -t uploadfs</pre>
 <p>Ou ouvrez <code>web/index.html</code> en simulation sur le PC.</p>
@@ -483,40 +575,33 @@ static String mimeOf(const String &p) {
   return "text/plain";
 }
 
-static bool serveFile(String path) {
-  if (path.endsWith("/")) path += "index.html";
-  if (!LittleFS.exists(path)) return false;
-  File f = LittleFS.open(path, "r");
-  if (!f) return false;
-  http.streamFile(f, mimeOf(path));
-  f.close();
-  return true;
-}
-
-static void onHttp() {
-  String path = http.uri();
-  if (path == "/") path = "/index.html";
-  if (serveFile(path)) return;
-  http.send_P(200, "text/html; charset=utf-8", FALLBACK_HTML);
-}
-
-static void onWsEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t len) {
-  if (type == WStype_CONNECTED) {
-    sendStatus("Client connecté");
-  } else if (type == WStype_TEXT) {
-    // payload n'est pas forcément terminé par 0
-    char buf[256];
-    size_t n = len < sizeof(buf) - 1 ? len : sizeof(buf) - 1;
-    memcpy(buf, payload, n);
-    buf[n] = 0;
-    handleCmd(buf);
-    (void)num;
+static void sendIndex(AsyncWebServerRequest *req) {
+  if (LittleFS.exists("/index.html")) {
+    req->send(LittleFS, "/index.html", "text/html; charset=utf-8");
+  } else {
+    req->send_P(200, "text/html; charset=utf-8", FALLBACK_HTML);
   }
 }
 
-// ---------------------------------------------------------------------------
-// Auto 80 → 10 SPS si instable à vide
-// ---------------------------------------------------------------------------
+static void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
+                      AwsEventType type, void *arg, uint8_t *data, size_t len) {
+  (void)server;
+  (void)client;
+  if (type == WS_EVT_CONNECT) {
+    sendStatus(tared ? "Client connecté" : "Client connecté — tare à vide obligatoire");
+  } else if (type == WS_EVT_DATA) {
+    AwsFrameInfo *info = (AwsFrameInfo *)arg;
+    if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {
+      char buf[256];
+      size_t n = len < sizeof(buf) - 1 ? len : sizeof(buf) - 1;
+      memcpy(buf, data, n);
+      buf[n] = 0;
+      handleCmd(buf);
+    }
+  }
+}
+
+#if HX711_RATE_WIRED
 static void chooseSps() {
   digitalWrite(PIN_HX711_RATE, HIGH);
   delay(250);
@@ -531,7 +616,7 @@ static void chooseSps() {
       acc2 += f * f;
       n++;
     }
-    yield();
+    pumpNet();
   }
   bool ok80 = false;
   if (n >= 12) {
@@ -549,6 +634,7 @@ static void chooseSps() {
     digitalWrite(PIN_HX711_RATE, LOW);
   }
 }
+#endif
 
 // ---------------------------------------------------------------------------
 // setup / loop
@@ -556,15 +642,27 @@ static void chooseSps() {
 void setup() {
   Serial.begin(115200);
   delay(200);
-  Serial.println("\n[TVM] Banc de traction Artaud");
+  Serial.println("\n[TVM] Banc de traction Artaud v" FIRMWARE_VERSION);
+#if RELAY_INSTALLED
+  Serial.println("[TVM] Relais STOP activé");
+#else
+  Serial.println("[TVM] Pas de relais — alarme 4000 N, STOP au pupitre TVM");
+#endif
 
   pinMode(PIN_HX711_DT, INPUT);
   pinMode(PIN_HX711_SCK, OUTPUT);
   digitalWrite(PIN_HX711_SCK, LOW);
+#if HX711_RATE_WIRED
   pinMode(PIN_HX711_RATE, OUTPUT);
+#endif
+#if RELAY_INSTALLED
   pinMode(PIN_STOP, OUTPUT);
-  pinMode(PIN_LED, OUTPUT);
   applyStopPin(false);
+#else
+  pinMode(PIN_STOP, INPUT);
+#endif
+  pinMode(PIN_LED, OUTPUT);
+  ledAlarm(false);
 
   prefs.begin("tvm", false);
   scaleRawPerN = prefs.getFloat("scale", DEFAULT_SCALE_RAW_PER_N);
@@ -572,28 +670,61 @@ void setup() {
   limitN       = prefs.getFloat("limit", FORCE_LIMIT_DEFAULT_N);
   if (limitN > FORCE_HARD_CAP_N) limitN = FORCE_HARD_CAP_N;
   calibrated   = prefs.getBool("cal", false);
+  tared        = prefs.getBool("tared", false);
   mode         = (Mode)prefs.getUChar("mode", MODE_TRACTION);
-  uint8_t sp   = prefs.getUChar("sps", 0);  // 0 = auto
+  uint8_t sp   = prefs.getUChar("sps", 0);
 
-  if (!LittleFS.begin(true)) {
-    Serial.println("[TVM] LittleFS indisponible");
+  // Ne pas formater en cas de corruption : ça effacerait l'appli web.
+  if (!LittleFS.begin(false)) {
+    Serial.println("[TVM] LittleFS non monté — uploadfs requis");
   }
 
   WiFi.mode(WIFI_AP);
   WiFi.softAP(WIFI_SSID, WIFI_PASS, WIFI_CHANNEL, 0, WIFI_MAX_CLIENTS);
   delay(100);
+  IPAddress ip = WiFi.softAPIP();
   Serial.print("[TVM] AP ");
   Serial.print(WIFI_SSID);
   Serial.print("  pass ");
   Serial.print(WIFI_PASS);
-  Serial.print("  IP ");
-  Serial.println(WiFi.softAPIP());
+  Serial.print("  http://");
+  Serial.println(ip);
 
-  http.onNotFound(onHttp);
-  http.begin();
-  ws.begin();
+  dns.start(53, "*", ip);
+
   ws.onEvent(onWsEvent);
+  http.addHandler(&ws);
 
+  http.on("/", HTTP_GET, sendIndex);
+  http.on("/generate_204", HTTP_GET, sendIndex);
+  http.on("/gen_204", HTTP_GET, sendIndex);
+  http.on("/hotspot-detect.html", HTTP_GET, sendIndex);
+  http.on("/library/test/success.html", HTTP_GET, sendIndex);
+  http.on("/canonical.html", HTTP_GET, sendIndex);
+  http.on("/fwlink", HTTP_GET, sendIndex);
+  http.on("/connecttest.txt", HTTP_GET, [](AsyncWebServerRequest *req) {
+    req->send(200, "text/plain", "Microsoft Connect Test");
+  });
+  http.on("/ncsi.txt", HTTP_GET, [](AsyncWebServerRequest *req) {
+    req->send(200, "text/plain", "Microsoft NCSI");
+  });
+  http.on("/success.txt", HTTP_GET, [](AsyncWebServerRequest *req) {
+    req->send(200, "text/plain", "success");
+  });
+  http.serveStatic("/", LittleFS, "/")
+      .setCacheControl("no-cache, no-store, must-revalidate");
+  http.onNotFound([](AsyncWebServerRequest *req) {
+    String p = req->url();
+    if (p.endsWith("/")) p += "index.html";
+    if (LittleFS.exists(p)) {
+      req->send(LittleFS, p, mimeOf(p));
+      return;
+    }
+    sendIndex(req);
+  });
+  http.begin();
+
+#if HX711_RATE_WIRED
   if (sp == SPS_SLOW) {
     sps = SPS_SLOW;
     digitalWrite(PIN_HX711_RATE, LOW);
@@ -603,38 +734,82 @@ void setup() {
   } else {
     chooseSps();
   }
+#else
+  (void)sp;
+  sps = SPS_SLOW;
+#endif
 
-  delay(300);
-  doTare(12);
+  tStartMs = millis();
+  lastHxMs = millis();
   bootMs = millis();
-  tStartMs = bootMs;
-  Serial.printf("[TVM] sps=%d scale=%.2f tare=%ld limit=%.0f\n",
-                sps, scaleRawPerN, offsetRaw, limitN);
+  Serial.printf("[TVM] sps=%d scale=%.2f tare=%ld limit=%.0f cal=%d\n",
+                (int)sps, (double)scaleRawPerN, offsetRaw, (double)limitN,
+                calibrated ? 1 : 0);
+  Serial.println("[TVM] Tare manuelle obligatoire à vide en début de séance.");
 }
 
 void loop() {
-  http.handleClient();
-  ws.loop();
+  pumpNet();
 
   long raw;
   if (hxReadNb(&raw)) {
     lastRaw = raw;
+    lastHxMs = millis();
+    hxEver = true;
+    hxOk = true;
+    if (hxFailLatched) {
+      hxFailLatched = false;
+    }
     forceN = rawToN(raw);
-    if (forceN > fmaxN) fmaxN = forceN;
-    if (mode == MODE_FATIGUE) {
+    if (running && forceN > fmaxN) fmaxN = forceN;
+    if (mode == MODE_FATIGUE && running) {
       if (cycles == 0 && fatSt == FAT_SEEK_RISE) cycMinN = forceN;
     }
     detectBreak(forceN);
     detectCycle(forceN);
     enforceLimit(forceN);
+
+    bool ev = lastEvt[0] != 0;
+    if (ev || (ws.count() && millis() - lastTxMs >= 20)) {
+      sendSample();
+    }
+  }
+
+  uint32_t hxTo = HX_FAIL_MIN_MS;
+  if (sps <= SPS_SLOW) hxTo = 500;
+  bool hxTimeout = hxEver && hxOk && (millis() - lastHxMs > hxTo);
+  bool hxSilentBoot = !hxEver && (millis() - bootMs > 2000);
+  if ((hxTimeout || hxSilentBoot) && !hxFailLatched) {
+    hxOk = false;
+    hxFailLatched = true;
+    setEvt("hxfail");
     sendSample();
+    sendStatus("MESURE PERDUE — ARRÊTER LE TVM au pupitre");
   }
 
   if (millis() - lastStatusMs > 2000) {
     lastStatusMs = millis();
-    // heartbeat léger si aucun client n'a demandé
+    if (ws.count()) {
+      if (overLive) {
+        sendStatus("ARRÊTER LA MACHINE — F > limite — STOP pupitre TVM");
+      } else if (hxFailLatched) {
+        sendStatus("MESURE PERDUE — ARRÊTER LE TVM au pupitre");
+      } else if (!tared) {
+        sendStatus("Tare à vide obligatoire");
+      }
+    }
   }
 
-  // Watchdog amical
-  yield();
+  // LED : clignote si alarme (surcharge ou HX711 mort)
+  bool alarm = overLive || hxFailLatched;
+  if (alarm) {
+    if (millis() - lastLedMs > 200) {
+      lastLedMs = millis();
+      static bool blink;
+      blink = !blink;
+      ledAlarm(blink);
+    }
+  } else {
+    ledAlarm(false);
+  }
 }

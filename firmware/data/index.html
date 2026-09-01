@@ -4,12 +4,17 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#ffb020">
+  <meta name="apple-mobile-web-app-capable" content="yes">
   <title>Banc de traction TVM — Antonin Artaud</title>
   <link rel="stylesheet" href="css/app.css">
   <link rel="manifest" href="manifest.json">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
 </head>
 <body>
+  <div id="alarm" class="alarm hidden" role="alert" aria-live="assertive">
+    <div class="alarm-title" id="alarm-title">ARRÊTER LA MACHINE</div>
+    <div class="alarm-sub" id="alarm-sub">Force au-dessus de 4000 N — STOP sur le pupitre TVM</div>
+  </div>
   <div class="hazard" aria-hidden="true"></div>
   <div class="wrap">
     <header class="head">
@@ -21,8 +26,16 @@
         <span class="pill sim" id="pill-link">Simulation</span>
         <span class="pill" id="pill-sps">SPS —</span>
         <span class="pill" id="pill-lim">Limite 4000 N</span>
+        <span class="pill" id="pill-ver">v1.1.1</span>
       </div>
     </header>
+
+    <div id="warn-sticky" class="warn-sticky hidden">
+      Limite dépassée pendant cet essai — vérifier l’éprouvette et le pupitre TVM avant de continuer.
+    </div>
+    <div id="note-relay" class="note-relay">
+      Pas de relais de coupure : si F ≥ 4000&nbsp;N, <strong>arrêter le TVM au pupitre</strong> (bouton STOP machine).
+    </div>
 
     <nav class="tabs" role="tablist">
       <button type="button" role="tab" id="tab-traction" aria-selected="true" data-mode="traction">Traction</button>
@@ -62,11 +75,12 @@
             <button class="act ok" type="button" id="btn-tare">Tare</button>
             <button class="act primary" type="button" id="btn-start">Démarrer</button>
             <button class="act" type="button" id="btn-rupture">Rupture manuelle</button>
-            <button class="act danger" type="button" id="btn-stop">Stop relais</button>
+            <button class="act danger" type="button" id="btn-stop">Arrêter l’enreg.</button>
             <button class="act" type="button" id="btn-csv">CSV</button>
+            <button class="act" type="button" id="btn-png">PNG</button>
             <button class="act" type="button" id="btn-reset">RAZ</button>
           </div>
-          <p class="note">Enregistrement : <span id="rec-info">arrêté</span>. Colonnes CSV : <kbd>time_ms,force_N,force_kg,event</kbd>. Pas d’extensomètre sur l’ESP32.</p>
+          <p class="note">Enregistrement : <span id="rec-info">arrêté</span>. Pas d’extensomètre sur l’ESP32. Pas de relais : le STOP machine est au <strong>pupitre TVM</strong>.</p>
         </div>
 
         <div class="view" id="view-fatigue">
@@ -74,19 +88,23 @@
           <div class="row">
             <button class="act ok" type="button" id="btn-tare2">Tare</button>
             <button class="act primary" type="button" id="btn-start2">Démarrer comptage</button>
-            <button class="act danger" type="button" id="btn-stop2">Stop relais</button>
+            <button class="act danger" type="button" id="btn-stop2">Arrêter l’enreg.</button>
             <button class="act" type="button" id="btn-csv2">CSV cycles</button>
             <button class="act" type="button" id="btn-reset2">RAZ cycles</button>
           </div>
-          <p class="note">Dernier cycle : Fmin <b id="last-fmin">—</b> · Fmax <b id="last-fmax">—</b>. CSV : <kbd>cycle,t_ms,Fmin_N,Fmax_N</kbd>.</p>
+          <p class="note">Dernier cycle : Fmin <b id="last-fmin">—</b> · Fmax <b id="last-fmax">—</b>.</p>
         </div>
 
         <div class="view" id="view-calib">
-          <p class="note">Cellule CZL301 500&nbsp;kg, 2,0030&nbsp;mV/V, 350&nbsp;Ω, 0,02&nbsp;% FS. Excitation HX711 à <strong>3,3&nbsp;V</strong> (GPIO ESP32 non 5&nbsp;V tolerant). Surcharge constructeur 120&nbsp;% FS. Limite logicielle par défaut <strong>4000&nbsp;N</strong>, plafond dur &lt;&nbsp;4900&nbsp;N.</p>
+          <p class="note">Jauge sur <strong>HX711 U1</strong> (DT1 GPIO 25, SCK1 GPIO 33, 3,3&nbsp;V). Pont R3/R4 1&nbsp;kΩ. Limite logicielle <strong>4000&nbsp;N</strong> : au-delà, <strong>arrêter le TVM au pupitre</strong> (pas de relais). Plafond dur &lt;&nbsp;4900&nbsp;N. Masse d’étalonnage conseillée <strong>≥ 20&nbsp;kg</strong> — l’échelle 877 n’est pas celle de cette jauge.</p>
+          <div class="row rawline">
+            <div>Brut HX711 <b id="raw">—</b></div>
+            <div>σ récente <b id="sigma">—</b></div>
+          </div>
           <div class="row">
             <button class="act ok" type="button" id="btn-tare3">Tare à vide</button>
             <label class="field">Masse connue (kg)
-              <input id="ref-kg" type="number" step="0.001" min="0.05" value="5">
+              <input id="ref-kg" type="number" step="0.001" min="0.05" value="20">
             </label>
             <button class="act primary" type="button" id="btn-cal">Étalonner</button>
           </div>
@@ -105,15 +123,25 @@
               <select id="unit"><option value="N">Newton (N)</option><option value="kg">kgf</option></select>
             </label>
             <label class="field">Cadence
-              <select id="sps"><option value="auto">Auto 80 puis 10 si instable</option><option value="80">80 SPS</option><option value="10">10 SPS</option></select>
+              <select id="sps"><option value="10">10 SPS</option><option value="80">80 SPS (si RATE câblé)</option></select>
             </label>
             <button class="act" type="button" id="btn-sps">Appliquer cadence</button>
+            <label class="field">CSV
+              <select id="csv-fmt">
+                <option value="fr" selected>Excel FR (; et virgule)</option>
+                <option value="iso">ISO (, et point)</option>
+              </select>
+            </label>
           </div>
-          <p class="note">Relais STOP : GPIO 26, <strong>actif haut</strong> (HIGH = relais collé = coupure moteur). Pilotage via transistor, jamais la bobine en direct. Inverser <kbd>STOP_ACTIVE_HIGH</kbd> dans <kbd>config.h</kbd> si le câblage est actif bas.</p>
+          <div class="row">
+            <button class="act danger" type="button" id="btn-sim-over">Simuler F ≥ 4000 N</button>
+          </div>
+          <p class="note" id="cal-log">Aucun étalonnage enregistré sur cet appareil.</p>
+          <p class="note">Carte EasyEDA : ESP32-WROOM-32 DevKitC-V4. <strong>U1 jauge</strong> DT1 = GPIO 25, SCK1 = GPIO 33, VCC = 3,3&nbsp;V. U2 (cellule 4 fils) non lue. Pas de broche RATE sur les XW-HX711 (10 SPS).</p>
         </div>
       </section>
     </div>
-    <p class="foot">Wi-Fi AP <kbd>TVM-TRACTION</kbd> / mot de passe <kbd>traction1</kbd> · http://192.168.4.1 · WebSocket port 81 · v1 atelier</p>
+    <p class="foot">Wi-Fi AP <kbd>TVM-TRACTION</kbd> / mot de passe <kbd>traction1</kbd> · http://192.168.4.1 · WebSocket <kbd>/ws</kbd> · v1.1.1 · U1 DT=25 SCK=33 · pas de relais</p>
   </div>
   <script src="js/protocol.js"></script>
   <script src="js/chart.js"></script>

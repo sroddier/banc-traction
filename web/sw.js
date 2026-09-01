@@ -1,7 +1,7 @@
 /* Service worker : installable seulement en http://localhost (contexte sécurisé).
  * L'AP ESP32 est en HTTP clair : la page fonctionne sans SW, c'est normal.
  */
-var CACHE = "tvm-traction-v1";
+var CACHE = "tvm-traction-v1.1.1";
 var ASSETS = [
   "./",
   "./index.html",
