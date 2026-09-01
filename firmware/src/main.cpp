@@ -1,11 +1,9 @@
 /* Banc de traction — ESP32 + HX711  v1.1.1
  * Lycée Antonin Artaud, BTS MS / FabLab
- * SAUTER TVM 5000N230N · jauge sur HX711 U1 · pas d'extensomètre
+ * SAUTER TVM 5000N230N · CZL301 soudé sur HX711 U1 · pas d'extensomètre
  *
- * Carte EasyEDA ESP32-WROOM-32 DevKitC-V4 + 2× XW-HX711 @ 3,3 V
- *   U1 jauge 3 fils (lue) : DT1 = GPIO 25, SCK1 = GPIO 33
- *   U2 cellule 4 fils (non lue) : DT2 = GPIO 14, SCK2 = GPIO 26
- *   VCC HX711 → 3V3   GND → GND     (pas 5 V)
+ * Toutes cartes ESP32 : DT = GPIO 25, SCK = GPIO 33, VCC = 3V3, GND = GND
+ * CZL301 4 fils sur pastilles E+ / E- / A+ / A- (pas le connecteur 3 plots + 1 kΩ).
  *
  * Relais désactivé : dépassement 4000 N = alarme « ARRÊTER LA MACHINE ».
  */

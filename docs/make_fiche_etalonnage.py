@@ -113,7 +113,7 @@ def draw():
     c.drawString(tx, H - 18 * mm, "Étalonnage de la jauge")
     c.setFillColorRGB(*MUTED)
     c.setFont("Ui", 8.5)
-    c.drawString(tx, H - 25.5 * mm, "HX711 U1  ·  DT1 GPIO 25  ·  SCK1 GPIO 33  ·  3,3 V  ·  10 SPS")
+    c.drawString(tx, H - 25.5 * mm, "HX711 U1  ·  DT GPIO 25  ·  SCK GPIO 33  ·  CZL301 soudé  ·  3,3 V")
     stripe_h = 5.5 * mm
     y0 = H - 40 * mm - stripe_h
     x = 0
@@ -269,7 +269,7 @@ def draw():
         "Force négative en traction : inverser les fils jauge sur U1, retarer, ré-étalonner.",
         "Ne pas lancer le TVM pendant l'étalonnage. Pas de choc sur la jauge.",
         "Pas de relais : F ≥ 4000 N → STOP pupitre. Limite 4000 N (max 4899 N).",
-        "U2 (4 fils) n'est pas lue. Relais éventuel : GPIO 4, jamais GPIO 26.",
+        "CZL301 soudé sur U1 (E+/E-/A+/A-), pas le connecteur 3 plots. Relais : GPIO 4.",
     ]
     ny = sy2 - 12 * mm
     for t in notes:

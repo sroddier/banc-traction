@@ -23,28 +23,26 @@ Version **1.1.1** — firmware PlatformIO, application web française, simulatio
 
 ---
 
-## 2. Câblage (carte EasyEDA, schéma 2020-11-26)
+## 2. Câblage CZL301 500 kg (Gotronic 32384)
 
-ESP32-WROOM-32 **DevKitC-V4** · deux HX711 **XW-HX711** alimentés en **3,3 V**.
+Fiche illustrée : [`docs/fiche-cablage-czl301.pdf`](docs/fiche-cablage-czl301.pdf).
+
+Le CZL301 est un **pont 4 fils**. Le firmware lit **U1** (DT = GPIO **25**, SCK = GPIO **33**) sur **toutes** les cartes ESP32. Souder les fils sur les pastilles analogiques du HX711, **pas** sur le connecteur 3 plots (R3/R4 1 kΩ).
 
 ```
-U1  XW-HX711  — jauge 3 fils (UTILISÉE par le firmware)
-  VCC  →  3V3  ESP32
-  GND  →  GND
-  SCK  →  SCK1 → GPIO 33
-  DT   →  DT1  → GPIO 25
-  Connecteur 3 plots + pont R3/R4 1 kΩ (complétion de pont)
+CZL301                 Pastilles HX711 U1
+  rouge  E+  →  E+
+  noir   E−  →  E- / GND
+  vert   A+  →  A+
+  blanc  A−  →  A-
+  jaune  blindage → GND
 
-U2  XW-HX711  — cellule 4 fils (non lue)
-  SCK2 → GPIO 26    DT2 → GPIO 14
-  Connecteur 4 plots E+ / A− / A+ / B+
+ESP32 (toutes cartes) : DT → GPIO 25, SCK → GPIO 33, VCC → 3V3 (pas 5 V).
 ```
 
-Pas de broche RATE sur ces modules : cadence **10 SPS**. GPIO 33 est **SCK1**, pas RATE.
+Si la force est **négative** en traction : bouton **Inverser le sens**, ou échanger vert/blanc, tare, étalonnage.
 
-Relais STOP (plus tard, `RELAY_INSTALLED 1`) : GPIO **4** (libre). Ne pas prendre GPIO 26 (SCK2).
-
-Si la force affichée est **négative** en traction après tare : inverser les fils de la jauge sur le connecteur U1, puis retarer et ré-étalonner.
+Relais STOP (plus tard) : GPIO **4**.
 
 ---
 
@@ -190,6 +188,7 @@ banc-traction/
   LICENSE
   docs/fiche-etudiant.pdf                  QR Wi-Fi + appli (élèves)
   docs/fiche-enseignant-etalonnage.pdf     tare, masse connue, échelle
+  docs/fiche-cablage-czl301.pdf            CZL301 500 kg → U2
   sync_web.py / sync-web-to-fs.bat / .sh
   firmware/
     platformio.ini

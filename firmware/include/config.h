@@ -1,14 +1,11 @@
 #pragma once
 /* Réglages matériel — Lycée Antonin Artaud, banc SAUTER TVM 5000N230N
  * Carte EasyEDA : ESP32-WROOM-32 DevKitC-V4 + 2× XW-HX711 @ 3,3 V
- * U1 = jauge 3 fils (utilisée) · U2 = cellule 4 fils (non lue)
- *
- * Broches U1 (schéma sroddier 2020-11-26) :
- *   DT1  → GPIO 25
- *   SCK1 → GPIO 33
+ * HX711 U1 : DT1 = GPIO 25, SCK1 = GPIO 33 (toutes cartes ESP32)
+ * CZL301 4 fils soudé sur E+ / E- / A+ / A- (pas le connecteur 3 plots).
  */
 
-#define FIRMWARE_VERSION "1.2.1"
+#define FIRMWARE_VERSION "1.2.4"
 
 // ----- Wi-Fi point d'accès (WPA2, mot de passe ≥ 8 caractères) -----
 #define WIFI_SSID        "TVM-TRACTION"
@@ -16,15 +13,13 @@
 #define WIFI_CHANNEL     6
 #define WIFI_MAX_CLIENTS 4
 
-// ----- HX711 U1 (jauge) — VCC = 3,3 V uniquement -----
+// ----- HX711 U1 — même brochage sur toutes les cartes ESP32 -----
+// CZL301 4 fils soudé sur E+/E-/A+/A- du HX711 (pas le connecteur 3 plots + 1 kΩ).
 #define PIN_HX711_DT     25   // DT1  → GPIO 25
 #define PIN_HX711_SCK    33   // SCK1 → GPIO 33
-// U2 (non utilisé par ce firmware) : DT2 GPIO14, SCK2 GPIO26
-// XW-HX711 : pas de broche RATE. Ne pas réutiliser GPIO 33.
 #define HX711_RATE_WIRED 0
 
 // ----- Relais d'arrêt (optionnel, DÉSACTIVÉ) -----
-// GPIO 4 libre sur la carte (GPIO 26 = SCK2 de U2, à ne pas prendre).
 #define RELAY_INSTALLED    0
 #define PIN_STOP           4
 #define STOP_ACTIVE_HIGH   1

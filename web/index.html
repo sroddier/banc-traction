@@ -99,7 +99,7 @@
         </div>
 
         <div class="view" id="view-calib">
-          <p class="note">Jauge <strong>HX711 U1</strong> (DT1 GPIO 25, SCK1 GPIO 33, 3,3&nbsp;V). Ordre : <strong>1) tare à vide</strong> (sans masse) → <strong>2) poser la masse</strong> dans le sens traction → <strong>3) Étalonner</strong>. Une jauge inverse (F négatif) est normale : l’étalonnage enregistre une échelle négative et l’affichage redevient positif.</p>
+          <p class="note">CZL301 soudé sur <strong>HX711 U1</strong> (DT GPIO 25, SCK GPIO 33, 3,3&nbsp;V — même broches sur toutes les cartes). Rouge→E+, Noir+jaune→GND, Vert→A+, Blanc→A−. Tare à vide → masse en traction → Étalonner. F négatif : Inverser le sens, ou échanger vert/blanc.</p>
           <div class="row rawline">
             <div>Brut HX711 <b id="raw">—</b></div>
             <div>Δ brut (vs tare) <b id="delta">—</b></div>
@@ -143,7 +143,7 @@
             <button class="act danger" type="button" id="btn-sim-over">Simuler F ≥ 4000 N</button>
           </div>
           <p class="note" id="cal-log">Aucun étalonnage enregistré sur cet appareil.</p>
-          <p class="note">Carte EasyEDA : ESP32-WROOM-32 DevKitC-V4. <strong>U1 jauge</strong> DT1 = GPIO 25, SCK1 = GPIO 33, VCC = 3,3&nbsp;V. U2 (cellule 4 fils) non lue. Pas de broche RATE sur les XW-HX711 (10 SPS).</p>
+          <p class="note">Convention toutes cartes : <strong>DT = GPIO 25, SCK = GPIO 33</strong>. CZL301 soudé sur E+/E-/A+/A- du HX711 U1 (pas le connecteur 3 plots). Voir <kbd>docs/fiche-cablage-czl301.pdf</kbd>.</p>
         </div>
       </section>
     </div>
